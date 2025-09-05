@@ -1,6 +1,6 @@
 # arborstats
 
-A command-line tool that automatically downloads the mesh of an EyeWire II neuron as `.obj` with [CaveClient/CloudVolume](https://github.com/seung-lab/cloud-volume), skeletonizes it as an `.swc` with [skeliner](https://github.com/berenslab/skeliner), flattens it with [pywarper](https://github.com/berenslab/pywarper) and computes arbor Stats using all all these information.
+A command-line tool that automatically downloads the mesh of an EyeWire II neuron as `.obj` with [CaveClient/CloudVolume](https://github.com/seung-lab/cloud-volume), skeletonizes it as an `.swc` with [skeliner](https://github.com/berenslab/skeliner), flattens it with [pywarper](https://github.com/berenslab/pywarper) and computes arbor Stats using all these information.
 
 > __NOTE__
 > 
