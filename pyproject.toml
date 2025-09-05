@@ -1,0 +1,31 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "arborstats"                       # PyPI package name (normalized)
+version = "0.1.0"
+description = "Compute arbor statistics from flatone outputs (Eyewire II)."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { file = "LICENSE" }
+authors = [{ name = "Your Name", email = "you@example.com" }]
+
+# flatone is a runtime dependency; pip will install it for your users
+dependencies = [
+  "flatone @ git+https://github.com/berenslab/flatone.git@main",
+  "numpy>=1.24",
+  "shapely>=2.0",
+  "pandas>=2.0",
+  "concave-hull>=0.0.7"   # import name: `concave_hull`
+]
+
+[project.scripts]
+arborstats = "arborstats.cli:main"
+
+[tool.hatch.build.targets.wheel]
+# Tell hatch to include the `arborstats/` package
+packages = ["arborstats"]
+
+[tool.hatch.metadata]
+allow-direct-references = true
