@@ -5,12 +5,19 @@ A command-line tool that automatically downloads the mesh of an EyeWire II neuro
 > __NOTE__
 > 
 > `flatone` relies on SuiteSparse, which does **NOT** run on native Windows. Use it on Unix-like enviroment or Windows Subsystem for Linux (WSL 2) instead.
->
->
->
->
->
->
+
+## Instructions to install prerequisites for `flatone`
+> ```bash
+> # prerequisites
+> ## mac
+> brew update
+> brew install suite-sparse
+> 
+> ## debian/ubuntu/WSL
+> sudo apt-get update
+> sudo apt-get install build-essential # if not already installed
+> sudo apt-get install libsuitesparse-dev
+>```
 
 
 ## Install
