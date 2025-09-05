@@ -20,9 +20,24 @@ A command-line tool that automatically downloads the mesh of an EyeWire II neuro
 >```
 
 
-## Install
+## Installation Instructions for ArborStats
 
-> System prerequisites for `flatone` (e.g., SuiteSparse) still apply; follow flatone’s README.
+> System prerequisites for `flatone` (e.g., SuiteSparse) still apply; follow the steps mentioned above.
 
 ```bash
-pip install arborstats
+# clone this repo
+git clone git@github.com:Schwartz-Lab-NU/arborStats.git
+cd arborStats
+
+# install conda environment with Python=3.13
+conda create -n arborstats python=3.13
+
+# activate conda environment
+conda activate arborstats
+
+# installing dependencies using the following command
+pip install -e .
+
+# check if the installation worked
+arborstats -h
+```
