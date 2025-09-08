@@ -2,6 +2,20 @@
 
 A command-line tool that automatically downloads the mesh of an EyeWire II neuron as `.obj` with [CaveClient/CloudVolume](https://github.com/seung-lab/cloud-volume), skeletonizes it as an `.swc` with [skeliner](https://github.com/berenslab/skeliner), flattens it with [pywarper](https://github.com/berenslab/pywarper) and computes arbor Stats using all these information.
 
+- A small command-line tool to run a flattening pipeline (e.g., flatone) and/or compute arbor statistics for a list of neuron segment IDs
+- `flatone` automatically downloads the mesh of an EyeWire II neuron as `.obj` with [CaveClient/CloudVolume](https://github.com/seung-lab/cloud-volume), skeletonizes it as an `.swc` with [skeliner](https://github.com/berenslab/skeliner) and flattens it with [pywarper](https://github.com/berenslab/pywarper)
+- Segment IDs can come from the CLI, a Google Sheet (CSV export), or a local CSV or a list of Segment IDs
+
+## Features 
+- Two-stage pipeline:
+  1. Run external flattener (e.g., flatone) per segment
+  2. Compute arbor statistics from emitted skeletons (SWC)
+- Flexible input: --segids, Google Sheet (--google-sheet-id), or CSV (--csv)
+- Schema from CLI: choose which columns to read and their dtypes (no hard-coding)
+- Smart recompute: --overwrite-all or --new-only
+- Mode control: run both, only flatone, or only arbor stats
+- Parallelism: -j/--jobs for multiprocessing
+- Robust output layout with per-segment folders and error markers
 > __NOTE__
 > 
 > `flatone` relies on SuiteSparse, which does **NOT** run on native Windows. Use it on Unix-like enviroment or Windows Subsystem for Linux (WSL 2) instead.
