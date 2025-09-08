@@ -11,28 +11,118 @@ from .runner import process_many
 class _Fmt(argparse.ArgumentDefaultsHelpFormatter, argparse.RawTextHelpFormatter):
     pass
 
+def _split_csvish(items):
+    """Accept ['A', 'B,C'] → ['A','B','C'] or None."""
+    if not items:
+        return None
+    out = []
+    for it in items:
+        out.extend([x.strip() for x in str(it).split(",") if x.strip()])
+    return out or None
+
+def _normalize_dtype_name(name: str) -> str:
+    n = name.strip().lower()
+    # Friendly aliases → pandas dtypes
+    alias = {
+        "int": "Int64", "int64": "Int64", "i64": "Int64",
+        "float": "float64", "f64": "float64", "float64": "float64",
+        "str": "string", "string": "string",
+        "bool": "boolean", "boolean": "boolean",
+        "cat": "category", "category": "category",
+    }
+    return alias.get(n, name)
+
+def _parse_dtypes_option(pairs):
+    """
+    --dtypes 'A=Int64' 'B=string' or --dtypes 'A=Int64,B=string'
+    → {'A':'Int64', 'B':'string'}
+    """
+    if not pairs:
+        return None
+    mapping = {}
+    for item in pairs:
+        for tok in str(item).split(","):
+            tok = tok.strip()
+            if not tok:
+                continue
+            if "=" not in tok:
+                raise SystemExit(f"--dtypes expects COL=DTYPE (got: {tok})")
+            col, typ = tok.split("=", 1)
+            mapping[col.strip()] = _normalize_dtype_name(typ.strip())
+    return mapping or None
+
+def _safe_parse_segids(series, name: str) -> list[int]:
+    """
+    Robustly parse potentially huge integer IDs without float round-off.
+    Accepts strings/numbers; ignores blanks; raises on fully missing col.
+    """
+    def _coerce(v):
+        if pd.isna(v):
+            return None
+        s = str(v).strip()
+        if not s:
+            return None
+        # Strip common formatting artifacts
+        if s.endswith(".0"):
+            s = s[:-2]
+        s = s.replace(",", "")
+        try:
+            return int(s)
+        except Exception:
+            return None
+
+    values = []
+    for v in series.tolist():
+        iv = _coerce(v)
+        if iv is not None:
+            values.append(iv)
+    if not values:
+        raise SystemExit(f"No usable segment IDs found in column '{name}'.")
+    return values
+
 def _read_segids_from_source(args) -> list[int]:
+    """
+    Read segids from explicit --segids, or from CSV/Google Sheet with user-provided
+    --read-columns and --dtypes. Also honors filters/column names from CLI.
+    """
+    # 1) Direct segids wins
     if args.segids:
         return [int(s) for s in args.segids]
 
+    usecols = _split_csvish(args.read_columns)   # None or list[str]
+    dtypes = _parse_dtypes_option(args.dtypes)   # None or dict[str,str]
+
+    segid_col = args.segid_col
+
+    # 2) Google Sheet
     if args.google_sheet_id:
+        # Export the sheet as CSV; you can add a &gid=... if you need a specific tab.
         url = f"https://docs.google.com/spreadsheets/d/{args.google_sheet_id}/export?format=csv"
-        df = pd.read_csv(url, dtype={"Updated Seg ID (Sept 2)": "Int64", "Status": "string", "Cell Requires Review (DO NOT use Updated IDs for those cells)": "string"},
-                         usecols=["Updated Seg ID (Sept 2)", "Status", "Cell Requires Review (DO NOT use Updated IDs for those cells)"])
-        df = df.dropna(subset=["Updated Seg ID (Sept 2)"])
-        df["Updated Seg ID (Sept 2)"] = df["Updated Seg ID (Sept 2)"].astype("int64")
-        if args.status_filter:
-            df = df[df["Status"].isin(args.status_filter)]
-        if args.cell_review_filter:
-            df = df[df["Cell Requires Review (DO NOT use Updated IDs for those cells)"].isin(args.cell_review_filter)]
-        return df["Updated Seg ID (Sept 2)"].tolist()
+        df = pd.read_csv(url, usecols=usecols, dtype=dtypes)
 
-    if args.csv:
-        df = pd.read_csv(args.csv)
-        col = args.csv_col or "Final SegID"
-        return [int(x) for x in df[col].dropna().astype("int64").tolist()]
+    # 3) CSV
+    elif args.csv:
+        df = pd.read_csv(args.csv, usecols=usecols, dtype=dtypes)
 
-    raise SystemExit("Provide --segids, or --google-sheet-id, or --csv")
+    else:
+        raise SystemExit("Provide --segids, or --google-sheet-id, or --csv")
+
+    # Optional filtering (only if the columns exist)
+    if args.status_filter and args.status_col in df.columns:
+        df = df[df[args.status_col].astype("string").isin(set(args.status_filter))]
+    if args.cell_review_filter and args.cell_review_col in df.columns:
+        df = df[df[args.cell_review_col].astype("string").isin(set(args.cell_review_filter))]
+
+    if segid_col not in df.columns:
+        raise SystemExit(
+            f"Column '{segid_col}' not found. Available columns: {list(df.columns)}.\n"
+            "Use --segid-col to point at the correct column, and --read-columns/--dtypes if needed."
+        )
+
+    segids = _safe_parse_segids(df[segid_col], segid_col)
+    print(segids[:15])
+    return segids[:15]
+
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
@@ -57,9 +147,40 @@ def build_parser() -> argparse.ArgumentParser:
     gsrc.add_argument("--csv", type=Path, help="CSV path containing segment IDs")
 
     # Extra source-related helpers (not mutually exclusive)
-    p.add_argument("--csv-col", 
-                   default=None, 
-                   help="Column name in --csv with segment IDs")
+    # ---- schema controls for CSV/Sheets ----
+    p.add_argument(
+        "--read-columns",
+        nargs="+",
+        default=["Updated Seg ID (Sept 2)", 
+                 "Status", 
+                 "Cell Requires Review (DO NOT use Updated IDs for those cells)"],
+        help="Columns to read from CSV/Sheet (space or comma separated). "
+             "Example: --read-columns 'Status' 'Final SegID'"
+    )
+    p.add_argument(
+        "--dtypes",
+        nargs="+",
+        default=["Updated Seg ID (Sept 2)=Int64", 
+                 "Status=string", 
+                 "Cell Requires Review (DO NOT use Updated IDs for those cells)=string"],
+        metavar="COL=DTYPE",
+        help="Per-column dtypes (space or comma separated). "
+             "Use pandas dtypes; aliases: int→Int64, str→string, bool→boolean. "
+             "Example: --dtypes 'Final SegID=Int64' 'Status=string'"
+    )
+
+    # ---- Which column holds the segids & filter column names (customizable) ----
+    p.add_argument("--segid-col", 
+                   default="Updated Seg ID (Sept 2)", 
+                   help="Column containing segment IDs (applies to CSV/Sheet)")
+    p.add_argument("--status-col", 
+                   default="Status", 
+                   help="Column name used for status filtering")
+    p.add_argument("--cell-review-col",
+                   default="Cell Requires Review (DO NOT use Updated IDs for those cells)", 
+                   help="Column name used for cell-review filtering")
+
+    
     p.add_argument("--status-filter", 
                    nargs="*", 
                    default=["Complete", "Complete (cut off)"],
