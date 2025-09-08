@@ -122,4 +122,17 @@ Which tasks to run — mutually exclusive
 
 ```
 
+## Output layout
 
+```bash
+out/
+├─ 720575940550176551/
+│  ├─ mesh.obj                      # required: mesh of an EyeWire II neuron
+│  ├─ skeleton.swc                  # required: output from flatone
+│  ├─ skeleton_warped.swc           # required: output from flatone
+│  ├─ arbor_stats.pkl               # required: computed statistics
+│  ├─ arbor_stats_error.txt         # present only if an error occurred
+│  ├─ *                             # other files from flatone outputs (not so important)
+├─ arbor_stats_error_seg_ids.txt    # segIDs which errored during arbor stats computation
+├─ not_processed_seg_ids.txt        # segIDs skipped (e.g., no meshes found)
+```
