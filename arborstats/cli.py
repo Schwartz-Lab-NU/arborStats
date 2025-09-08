@@ -120,8 +120,8 @@ def _read_segids_from_source(args) -> list[int]:
         )
 
     segids = _safe_parse_segids(df[segid_col], segid_col)
-    print(segids[:15])
-    return segids[:15]
+    
+    return segids
 
 
 def build_parser() -> argparse.ArgumentParser:
