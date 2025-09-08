@@ -76,6 +76,7 @@ arborstats \
 ```
 
 - Read IDs from a CSV:
+```bash
 arborstats \
   --csv data/segids.csv \
   --read-columns "SegID,Status" \
@@ -83,4 +84,5 @@ arborstats \
   --segid-col "SegID" \
   --status-col "Status" --status-filter Complete \
   --output-dir ./out
+```
 
