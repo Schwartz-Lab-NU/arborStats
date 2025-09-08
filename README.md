@@ -86,3 +86,40 @@ arborstats \
   --output-dir ./out
 ```
 
+## CLI 
+```bash
+usage: arborstats (--segids ... | --google-sheet-id ... | --csv CSV) --output-dir PATH [options]
+
+Input source (choose exactly one) — mutually exclusive
+  --segids SEGID [SEGID ...]   One or more segment IDs
+  --google-sheet-id ID         Google Sheet ID to read (CSV export URL is inferred)
+  --csv PATH                   CSV path containing segment IDs
+
+Schema controls
+  --read-columns COL [COL ...]   Columns to read (space or comma separated)
+  --dtypes COL=DTYPE [...]       Per-column dtypes (e.g., Final SegID=Int64, Status=string)
+
+Column names & filters
+  --segid-col NAME               Column containing segment IDs (default: "Final SegID")
+  --status-col NAME              Status column name (default: "Status")
+  --cell-review-col NAME         Cell-review column name (default: "Cell Requires Review")
+  --status-filter ...            Values to include from the status column (default: Complete, "Complete (cut off)")
+  --cell-review-filter ...       Values to include from the cell-review column (default: FALSE)
+  --csv-col NAME                 (deprecated) overrides --segid-col when using --csv
+
+Common
+  --output-dir PATH              Root output directory (per-seg subfolders are created)
+  -j, --jobs N                   Parallel workers (default: 1)
+
+Overwrite policy — mutually exclusive
+  --overwrite-all                Force recompute even if outputs exist
+  --new-only                     Only compute when expected outputs are missing
+
+Which tasks to run — mutually exclusive
+  --flatone-arbor-stats-both     Run flatone and compute arbor stats (default)
+  --arbor-stats-only             Compute only arbor stats (expects existing SWC)
+  --flatone-only                 Run flatone only (skip arbor stats)
+
+```
+
+
