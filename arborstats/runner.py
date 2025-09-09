@@ -114,8 +114,11 @@ def run_flattener(seg_id: int, root_output: Path, overwrite: bool = False) -> Pa
 
     # Preserve original behavior: detect 'no mesh' case and raise.
     if "No meshes found." in full_output:
-        (seg_dir / "error_msg.txt").write_text("No meshes found.\n")
+        (seg_dir / "flatone_error.txt").write_text("No meshes found.\n")
         raise ArborRunError("No meshes found.")
+    if "No CAVEclient token found." in full_output:
+        (seg_dir / "flatone_error.txt").write_text("No CAVEclient token found.\n")
+        raise ArborRunError("No CAVEclient token found. Please add token using the instructions above.")
 
 
     return seg_dir
@@ -200,7 +203,11 @@ def _one_worker(args: tuple) -> tuple:
 
     except ArborRunError as e:
         # Something expected but absent (e.g., no mesh / no SWC).
-        return ("no-mesh", seg_id, str(e))
+        print("Error : ", e)
+        if str(e) == "No meshes found.":
+            return ("no-mesh", seg_id, str(e))
+        elif str(e).startswith("No CAVEclient token found."):
+            return ("No-CAVEclient-token-found", seg_id, str(e))
     except Exception as e:
         return ("err", seg_id, f"{type(e).__name__}: {e}")
 
@@ -232,11 +239,16 @@ def process_many(
     with ctx.Pool(processes=jobs) as pool:
         for res in pool.imap_unordered(_one_worker, work):
             kind = res[0]
-
+            
+            if kind == "No-CAVEclient-token-found":
+                _, sid, msg = res
+                print(f"SegID {sid} skipped: {msg}", file=sys.stderr)
+                break
             if kind == "ok":
                 # success for this seg_id
                 continue
 
+            
             if kind == "no-mesh":
                 _, sid, msg = res
                 # Track segIDs that could not be processed due to missing mesh/SWC
