@@ -183,7 +183,7 @@ def build_parser() -> argparse.ArgumentParser:
     
     p.add_argument("--status-filter", 
                    nargs="*", 
-                   default=["Complete", "Complete (cut off)"],
+                   default=["WIP", "Complete", "Complete (cut off)", "Wrong Type", "611 Assigned"],
                    help="Values in the 'Status' column to include when reading a sheet/csv")
     p.add_argument("--cell-review-filter", 
                    nargs="*", 
