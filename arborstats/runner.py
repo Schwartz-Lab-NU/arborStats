@@ -10,7 +10,14 @@ import multiprocessing as mp
 from .core import load_swc, arborStatsFromSkeleton
 
 class ArborRunError(RuntimeError):
-    pass
+    """
+    Exception raised for anticipated runtime issues when orchestrating arbor stats.
+    Optional `code` attribute enables callers to branch on specific failure kinds.
+    """
+
+    def __init__(self, message: str, *, code: str | None = None) -> None:
+        super().__init__(message)
+        self.code = code
 
 
 # ---------------------------
@@ -109,16 +116,29 @@ def run_flattener(seg_id: int, root_output: Path, overwrite: bool = False) -> Pa
         if proc.stdout:
             proc.stdout.close()
 
-    proc.wait()
+    return_code = proc.wait()
     full_output = "".join(lines)
 
     # Preserve original behavior: detect 'no mesh' case and raise.
     if "No meshes found." in full_output:
         (seg_dir / "flatone_error.txt").write_text("No meshes found.\n")
-        raise ArborRunError("No meshes found.")
+        raise ArborRunError("No meshes found.", code="no-mesh")
     if "No CAVEclient token found." in full_output:
         (seg_dir / "flatone_error.txt").write_text("No CAVEclient token found.\n")
-        raise ArborRunError("No CAVEclient token found. Please add token using the instructions above.")
+        raise ArborRunError(
+            "No CAVEclient token found. Please add token using the instructions above.",
+            code="no-cave-token",
+        )
+
+    if return_code != 0:
+        if full_output:
+            error_file.write_text(full_output)
+        else:
+            error_file.write_text(f"flatone exited with code {return_code} without output.\n")
+        raise ArborRunError(
+            f"flatone exited with code {return_code} for seg {seg_id}",
+            code="flatone-failed",
+        )
 
 
     return seg_dir
@@ -142,7 +162,10 @@ def compute_arbor_stats_for_seg(seg_id: int, root_output: Path, overwrite: bool 
 
     swc_path = _find_swc_for_stats(root_output, seg_id)
     if swc_path is None:
-        raise ArborRunError(f"No skeleton_warped.swc found for seg {seg_id}. Run flatone first or provide a skeleton.")
+        raise ArborRunError(
+            f"No skeleton_warped.swc found for seg {seg_id}. Run flatone first or provide a skeleton.",
+            code="missing-skeleton",
+        )
 
     coords, radii, edges = load_swc(str(swc_path))
     stats, units = arborStatsFromSkeleton(coords, edges, radii=radii)
@@ -204,10 +227,17 @@ def _one_worker(args: tuple) -> tuple:
     except ArborRunError as e:
         # Something expected but absent (e.g., no mesh / no SWC).
         print("Error : ", e)
-        if str(e) == "No meshes found.":
-            return ("no-mesh", seg_id, str(e))
-        elif str(e).startswith("No CAVEclient token found."):
-            return ("No-CAVEclient-token-found", seg_id, str(e))
+        msg = str(e)
+        code = getattr(e, "code", None)
+        if code == "no-mesh" or msg == "No meshes found.":
+            return ("no-mesh", seg_id, msg)
+        if code == "no-cave-token" or msg.startswith("No CAVEclient token found."):
+            return ("No-CAVEclient-token-found", seg_id, msg)
+        if code == "missing-skeleton" or "No skeleton_warped.swc found" in msg:
+            return ("missing-skeleton", seg_id, msg)
+        if code == "flatone-failed":
+            return ("flatone-failed", seg_id, msg)
+        return ("err", seg_id, msg)
     except Exception as e:
         return ("err", seg_id, f"{type(e).__name__}: {e}")
 
@@ -228,8 +258,13 @@ def process_many(
     root_output = Path(root_output)
     root_output.mkdir(parents=True, exist_ok=True)
 
+    tracked_markers = {
+        "not_processed_seg_ids.txt",
+        "arbor_stats_error_seg_ids.txt",
+        "flatone_failed_seg_ids.txt",
+    }
     for f in root_output.glob("*.txt"):
-        if f.name == "not_processed_seg_ids.txt" or f.name == "arbor_stats_error_seg_ids.txt":
+        if f.name in tracked_markers:
             f.unlink()
 
     # Prepare work items for the pool
@@ -254,6 +289,11 @@ def process_many(
                 # Track segIDs that could not be processed due to missing mesh/SWC
                 (root_output / "not_processed_seg_ids.txt").open("a").write(f"{sid}\n")
                 # Optionally keep a per-seg note:
+                (root_output / str(sid) / "arbor_stats_error.txt").write_text(msg)
+                continue
+            if kind in ("missing-skeleton", "flatone-failed"):
+                _, sid, msg = res
+                (root_output / "flatone_failed_seg_ids.txt").open("a").write(f"{sid}\n")
                 (root_output / str(sid) / "arbor_stats_error.txt").write_text(msg)
                 continue
 
