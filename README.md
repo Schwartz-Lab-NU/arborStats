@@ -104,6 +104,7 @@ Column names & filters
   --segid-col NAME               Column containing segment IDs (default: "Final SegID")
   --status-col NAME              Status column name (default: "Status")
   --cell-review-col NAME         Cell-review column name (default: "Cell Requires Review")
+  --cell-class-col NAME          Column containing cell-class labels (default: "Cell Class")
   --status-filter ...            Values to include from the status column (default: Complete, "Complete (cut off)")
   --cell-review-filter ...       Values to include from the cell-review column (default: FALSE)
   --csv-col NAME                 (deprecated) overrides --segid-col when using --csv

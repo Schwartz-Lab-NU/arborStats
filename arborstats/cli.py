@@ -51,36 +51,36 @@ def _parse_dtypes_option(pairs):
             mapping[col.strip()] = _normalize_dtype_name(typ.strip())
     return mapping or None
 
+def _coerce_seg_id_value(v):
+    if pd.isna(v):
+        return None
+    s = str(v).strip()
+    if not s:
+        return None
+    if s.endswith(".0"):
+        s = s[:-2]
+    s = s.replace(",", "")
+    try:
+        return int(s)
+    except Exception:
+        return None
+
+
 def _safe_parse_segids(series, name: str) -> list[int]:
     """
     Robustly parse potentially huge integer IDs without float round-off.
     Accepts strings/numbers; ignores blanks; raises on fully missing col.
     """
-    def _coerce(v):
-        if pd.isna(v):
-            return None
-        s = str(v).strip()
-        if not s:
-            return None
-        # Strip common formatting artifacts
-        if s.endswith(".0"):
-            s = s[:-2]
-        s = s.replace(",", "")
-        try:
-            return int(s)
-        except Exception:
-            return None
-
     values = []
     for v in series.tolist():
-        iv = _coerce(v)
+        iv = _coerce_seg_id_value(v)
         if iv is not None:
             values.append(iv)
     if not values:
         raise SystemExit(f"No usable segment IDs found in column '{name}'.")
     return values
 
-def _read_segids_from_source(args) -> list[int]:
+def _read_segids_from_source(args) -> tuple[list[int], dict[int, str | None] | None]:
     """
     Read segids from explicit --segids, or from CSV/Google Sheet with user-provided
     --read-columns and --dtypes. Also honors filters/column names from CLI.
@@ -119,9 +119,31 @@ def _read_segids_from_source(args) -> list[int]:
             "Use --segid-col to point at the correct column, and --read-columns/--dtypes if needed."
         )
 
-    segids = _safe_parse_segids(df[segid_col], segid_col)
-    
-    return segids
+    cell_classes: dict[int, str | None] | None = None
+    segids: list[int]
+    class_col = getattr(args, "cell_class_col", None)
+    if class_col and class_col in df.columns:
+        cell_classes = {}
+        segids = []
+        for _, row in df.iterrows():
+            segid_val = _coerce_seg_id_value(row[segid_col])
+            if segid_val is None:
+                continue
+            segids.append(segid_val)
+            raw_cell = row[class_col]
+            if pd.isna(raw_cell):
+                cell_classes[segid_val] = None
+            else:
+                cell_str = str(raw_cell).strip()
+                cell_classes[segid_val] = cell_str if cell_str else None
+        if not segids:
+            raise SystemExit(f"No usable segment IDs found in column '{segid_col}'.")
+    else:
+        segids = _safe_parse_segids(df[segid_col], segid_col)
+        cell_classes = None
+
+    segids = segids[:100]
+    return segids, cell_classes
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -179,6 +201,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--cell-review-col",
                    default="Cell Requires Review (DO NOT use Updated IDs for those cells)", 
                    help="Column name used for cell-review filtering")
+    p.add_argument("--cell-class-col",
+                   default="Cell Class",
+                   help="Column name containing cell class labels (optional)")
 
     
     p.add_argument("--status-filter", 
@@ -255,7 +280,7 @@ def main(argv: list[str] | None = None) -> None:
     parser = build_parser()
     args = parser.parse_args(argv)
 
-    segids = _read_segids_from_source(args)
+    segids, segid_cell_classes = _read_segids_from_source(args)
     if not segids:
         print("No segment IDs found.", file=sys.stderr)
         sys.exit(2)
@@ -283,6 +308,7 @@ def main(argv: list[str] | None = None) -> None:
         mode=mode,
         new_only=new_only,
         stats_method=args.stats_method,
+        cell_classes=segid_cell_classes,
     )
 
 if __name__ == "__main__":

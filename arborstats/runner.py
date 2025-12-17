@@ -275,7 +275,13 @@ def compute_arbor_stats_for_seg(seg_id: int, root_output: Path, overwrite: bool 
     return out_pkl
 
 
-def compute_morphopy_stats_for_seg(seg_id: int, root_output: Path, overwrite: bool = False) -> Path:
+def compute_morphopy_stats_for_seg(
+    seg_id: int,
+    root_output: Path,
+    *,
+    cell_class: str | None = None,
+    overwrite: bool = False,
+) -> Path:
     """
     Compute meshes/skeletons using the morphopy pipeline (process_cell) and persist
     stats computed via compute_stats from morphopyStats.py.
@@ -306,6 +312,7 @@ def compute_morphopy_stats_for_seg(seg_id: int, root_output: Path, overwrite: bo
             cv=cv,
             global_map=global_map,
             always_detect_axon=True,
+            cellclass=cell_class,
             add_stats=False,
             verbose=True
         )
@@ -397,7 +404,7 @@ def _decide_tasks_for_seg(
 
 
 def _one_worker(args: tuple) -> tuple:
-    seg_id, root_output, mode, overwrite, new_only, stats_method = args
+    seg_id, root_output, mode, overwrite, new_only, stats_method, cell_class = args
     try:
         need_flat, need_arbor = _decide_tasks_for_seg(
             seg_id, root_output, mode, overwrite, new_only, stats_method
@@ -410,7 +417,14 @@ def _one_worker(args: tuple) -> tuple:
                 compute_arbor_stats_for_seg(seg_id, root_output, overwrite=overwrite)
         else:
             if need_arbor:
-                compute_morphopy_stats_for_seg(seg_id, root_output, overwrite=overwrite)
+                print("#####################################################################\n" \
+                "Cell Class:", cell_class)
+                compute_morphopy_stats_for_seg(
+                    seg_id,
+                    root_output,
+                    cell_class=cell_class,
+                    overwrite=overwrite,
+                )
 
         return ("ok", seg_id)
 
@@ -444,6 +458,7 @@ def process_many(
     mode: str = "both",       # "both" | "flatone-only" | "arbor-only"
     new_only: bool = False,   # process only missing outputs when not overwriting
     stats_method: str = "flatone",
+    cell_classes: dict[int, str | None] | None = None,
 ) -> None:
     """
     Backward-compatible entry point with two new keyword args:
@@ -470,8 +485,17 @@ def process_many(
             f.unlink()
 
     # Prepare work items for the pool
+    class_map = {int(k): v for k, v in (cell_classes or {}).items()}
     work = [
-        (int(sid), root_output, mode, bool(overwrite), bool(new_only), stats_method)
+        (
+            int(sid),
+            root_output,
+            mode,
+            bool(overwrite),
+            bool(new_only),
+            stats_method,
+            class_map.get(int(sid)),
+        )
         for sid in seg_ids
     ]
 
