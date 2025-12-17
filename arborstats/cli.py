@@ -142,7 +142,8 @@ def _read_segids_from_source(args) -> tuple[list[int], dict[int, str | None] | N
         segids = _safe_parse_segids(df[segid_col], segid_col)
         cell_classes = None
 
-    segids = segids[:100]
+    print(len(segids))
+    print(len(list(set(segids))))
     return segids, cell_classes
 
 
