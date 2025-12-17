@@ -488,7 +488,7 @@ def process_many(
     root_output = Path(root_output)
     root_output.mkdir(parents=True, exist_ok=True)
 
-tracked_markers = {
+    tracked_markers = {
         "not_processed_seg_ids.txt",
         "arbor_stats_error_seg_ids.txt",
         "flatone_failed_seg_ids.txt",
