@@ -168,6 +168,20 @@ def _get_cloudvolume():
     return _MORPHOPY_CV
 
 
+def _write_run_error(root_output: Path, message: str) -> None:
+    """
+    Persist a fatal orchestrator-level error message so users can inspect it even
+    if stdout/stderr were truncated (e.g., due to multiprocessing).
+    """
+    msg = message.strip()
+    if not msg:
+        return
+    try:
+        (Path(root_output) / "arbor_stats_run_error.txt").write_text(msg + "\n", encoding="utf-8")
+    except Exception:
+        pass
+
+
 # ---------------------------
 # TASK IMPLEMENTATIONS
 # ---------------------------
@@ -474,7 +488,7 @@ def process_many(
     root_output = Path(root_output)
     root_output.mkdir(parents=True, exist_ok=True)
 
-    tracked_markers = {
+tracked_markers = {
         "not_processed_seg_ids.txt",
         "arbor_stats_error_seg_ids.txt",
         "flatone_failed_seg_ids.txt",
@@ -506,6 +520,7 @@ def process_many(
             
             if kind == "No-CAVEclient-token-found":
                 _, sid, msg = res
+                _write_run_error(root_output, f"SegID {sid} skipped: {msg}")
                 print(f"SegID {sid} skipped: {msg}", file=sys.stderr)
                 break
             if kind in (
@@ -515,6 +530,7 @@ def process_many(
                 "morphopy-cv-error",
             ):
                 _, sid, msg = res
+                _write_run_error(root_output, msg)
                 print(msg, file=sys.stderr)
                 break
             if kind == "ok":
