@@ -12,6 +12,7 @@
 - Schema from CLI: choose which columns to read and their dtypes (no hard-coding)
 - Smart recompute: --overwrite-all or --new-only
 - Mode control: run both, only flatone, or only arbor stats
+- Swappable stats backend: default flatone flow or a Morphopy-based pipeline
 - Parallelism: -j/--jobs for multiprocessing
 - Robust output layout with per-segment folders and error markers
 
@@ -110,6 +111,9 @@ Column names & filters
 Common
   --output-dir PATH              Root output directory (per-seg subfolders are created)
   -j, --jobs N                   Parallel workers (default: 1)
+  --stats-method {flatone,morphopy}
+                                  'flatone' (default) runs flatone + arborStatsFromSkeleton.
+                                  'morphopy' runs the in-repo morphopy pipeline using the bundled global map.
 
 Overwrite policy — mutually exclusive
   --overwrite-all                Force recompute even if outputs exist
@@ -131,8 +135,19 @@ out/
 │  ├─ skeleton.swc                  # required: output from flatone
 │  ├─ skeleton_warped.swc           # required: output from flatone
 │  ├─ arbor_stats.pkl               # required: computed statistics
+│  ├─ mesh_morphopy.obj             # present when --stats-method=morphopy
+│  ├─ skeleton_warped_morphopy.swc  # morphopy skeleton (optional)
+│  ├─ arbor_stats_morphopy.pkl      # stats when using morphopy backend
 │  ├─ arbor_stats_error.txt         # present only if an error occurred
 │  ├─ *                             # other files from flatone outputs (not so important)
 ├─ arbor_stats_error_seg_ids.txt    # segIDs which errored during arbor stats computation
 ├─ not_processed_seg_ids.txt        # segIDs skipped (e.g., no meshes found)
 ```
+
+## Morphopy backend
+
+- Enable via `--stats-method morphopy` (default remains `flatone`).
+- Requires optional dependencies: `pip install morphopy skeliner cloud-volume pywarper trimesh`.
+- Uses the built-in `get_cv()` helper to open the dataset and the cached global map in `arborstats/cached/global_map_j1_a16.npz`.
+- Writes `mesh_morphopy.obj`, `skeleton_warped_morphopy.swc`, and `arbor_stats_morphopy.pkl` alongside the legacy filenames inside each segment folder.
+- Stats are computed with `compute_stats` from `morphopyStats.py`, so you get the richer Morphopy metrics without running the external flatone CLI.

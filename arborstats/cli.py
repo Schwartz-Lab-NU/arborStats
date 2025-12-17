@@ -183,7 +183,7 @@ def build_parser() -> argparse.ArgumentParser:
     
     p.add_argument("--status-filter", 
                    nargs="*", 
-                   default=["WIP", "Complete", "Complete (cut off)", "Wrong Type", "611 Assigned"],
+                   default=[None, "WIP", "Complete", "Complete (cut off)", "Wrong Type", "611 Assigned"],
                    help="Values in the 'Status' column to include when reading a sheet/csv")
     p.add_argument("--cell-review-filter", 
                    nargs="*", 
@@ -199,6 +199,16 @@ def build_parser() -> argparse.ArgumentParser:
                    type=int, 
                    default=1, 
                    help="parallel workers")
+    p.add_argument(
+        "--stats-method",
+        choices=("flatone", "morphopy"),
+        default="flatone",
+        help=(
+            "Pick which backend computes arbor statistics. "
+            "'flatone' (default) runs flatone + arborStatsFromSkeleton. "
+            "'morphopy' runs the in-repo morphopy pipeline using cached global maps."
+        ),
+    )
 
     # ---------- Overwrite policy (MUTUALLY EXCLUSIVE) ----------
     ow = p.add_argument_group(
@@ -262,6 +272,9 @@ def main(argv: list[str] | None = None) -> None:
     overwrite = bool(getattr(args, "overwrite_all", False))
     new_only = bool(getattr(args, "new_only", False))
 
+    if args.stats_method == "morphopy" and mode == "flatone-only":
+        parser.error("--stats-method=morphopy cannot be combined with --flatone-only")
+
     process_many(
         segids,
         args.output_dir,
@@ -269,6 +282,7 @@ def main(argv: list[str] | None = None) -> None:
         jobs=args.jobs,
         mode=mode,
         new_only=new_only,
+        stats_method=args.stats_method,
     )
 
 if __name__ == "__main__":

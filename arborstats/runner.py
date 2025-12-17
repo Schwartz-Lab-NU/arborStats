@@ -4,8 +4,10 @@ import sys
 import pickle
 import subprocess
 from pathlib import Path
-from typing import Iterable, Tuple
+from typing import Any, Iterable, Tuple
 import multiprocessing as mp
+
+import numpy as np
 
 from .core import load_swc, arborStatsFromSkeleton
 
@@ -18,6 +20,19 @@ class ArborRunError(RuntimeError):
     def __init__(self, message: str, *, code: str | None = None) -> None:
         super().__init__(message)
         self.code = code
+
+
+_MORPHOPY_HINT = (
+    "Install the Morphopy extras (e.g., pip install morphopy skeliner cloud-volume pywarper trimesh)."
+)
+_MORPHOPY_GLOBAL_MAP_PATH = Path(__file__).resolve().parent / "cached" / "global_map_j1_a16.npz"
+_MORPHOPY_FUNCS: dict[str, Any] | None = None
+_MORPHOPY_GLOBAL_MAP: dict | None = None
+_MORPHOPY_CV = None
+
+MORPHOPY_MESH_NAME = "mesh.obj"
+MORPHOPY_SWC_NAME = "skeleton_warped_morphopy.swc"
+MORPHOPY_STATS_NAME = "arbor_stats_morphopy.pkl"
 
 
 # ---------------------------
@@ -68,6 +83,89 @@ def _find_swc_for_stats(root_output: Path, seg_id: int) -> Path | None:
         return skel
     
     return None
+
+
+def _morphopy_stats_exists(root_output: Path, seg_id: int) -> bool:
+    d = _seg_dir(root_output, seg_id)
+    if not d.exists():
+        return False
+    return (d / MORPHOPY_STATS_NAME).exists()
+
+
+def _ensure_morphopy_modules() -> dict[str, Any]:
+    global _MORPHOPY_FUNCS
+    if _MORPHOPY_FUNCS is not None:
+        return _MORPHOPY_FUNCS
+    try:
+        from . import morphopyStats as morph_mod
+        from skeliner.io import to_swc as skeliner_to_swc  # type: ignore
+    except ModuleNotFoundError as exc:
+        missing = getattr(exc, "name", None) or "morphopy dependencies"
+        raise ArborRunError(
+            f"Stats method 'morphopy' requires optional dependency '{missing}'. {_MORPHOPY_HINT}",
+            code="missing-morphopy-deps",
+        ) from exc
+    except ImportError as exc:
+        raise ArborRunError(
+            f"Failed to import morphopy stack: {exc}",
+            code="missing-morphopy-deps",
+        ) from exc
+
+    _MORPHOPY_FUNCS = {
+        "process_cell": morph_mod.process_cell,
+        "compute_stats": morph_mod.compute_stats,
+        "get_cv": morph_mod.get_cv,
+        "to_swc": skeliner_to_swc,
+    }
+    return _MORPHOPY_FUNCS
+
+
+def _load_global_map_from_disk(path: Path) -> dict:
+    if not path.exists():
+        raise ArborRunError(
+            f"Morphopy global_map file not found: {path}",
+            code="morphopy-global-map-missing",
+        )
+    try:
+        with np.load(path, allow_pickle=True) as data:
+            mapping = {key: data[key] for key in data.files}
+    except Exception as exc:
+        raise ArborRunError(
+            f"Failed to load morphopy global_map: {exc}",
+            code="morphopy-global-map-error",
+        ) from exc
+    return mapping
+
+
+def _get_global_map() -> dict:
+    global _MORPHOPY_GLOBAL_MAP
+    if _MORPHOPY_GLOBAL_MAP is None:
+        _MORPHOPY_GLOBAL_MAP = _load_global_map_from_disk(_MORPHOPY_GLOBAL_MAP_PATH)
+    return _MORPHOPY_GLOBAL_MAP
+
+
+def _get_cloudvolume():
+    global _MORPHOPY_CV
+    if _MORPHOPY_CV is not None:
+        return _MORPHOPY_CV
+    funcs = _ensure_morphopy_modules()
+    get_cv = funcs["get_cv"]
+    try:
+        cv = get_cv()
+    except SystemExit as exc:
+        raise ArborRunError(
+            "No CAVEclient token found. Please add one before using the morphopy backend.",
+            code="No-CAVEclient-token-found",
+        ) from exc
+    except ArborRunError:
+        raise
+    except Exception as exc:
+        raise ArborRunError(
+            f"Failed to initialize CloudVolume: {exc}",
+            code="morphopy-cv-error",
+        ) from exc
+    _MORPHOPY_CV = cv
+    return _MORPHOPY_CV
 
 
 # ---------------------------
@@ -177,6 +275,92 @@ def compute_arbor_stats_for_seg(seg_id: int, root_output: Path, overwrite: bool 
     return out_pkl
 
 
+def compute_morphopy_stats_for_seg(seg_id: int, root_output: Path, overwrite: bool = False) -> Path:
+    """
+    Compute meshes/skeletons using the morphopy pipeline (process_cell) and persist
+    stats computed via compute_stats from morphopyStats.py.
+    """
+    segdir = _seg_dir(root_output, seg_id)
+    segdir.mkdir(parents=True, exist_ok=True)
+
+    error_file = segdir / "arbor_stats_error.txt"
+    if error_file.exists():
+        error_file.unlink()
+
+    mesh_path = segdir / MORPHOPY_MESH_NAME
+    swc_path = segdir / MORPHOPY_SWC_NAME
+    out_pkl = segdir / MORPHOPY_STATS_NAME
+    if out_pkl.exists() and not overwrite:
+        return out_pkl
+
+    funcs = _ensure_morphopy_modules()
+    process_cell = funcs["process_cell"]
+    compute_stats_fn = funcs["compute_stats"]
+    to_swc = funcs["to_swc"]
+    cv = _get_cloudvolume()
+    global_map = _get_global_map()
+
+    try:
+        result = process_cell(
+            cell=str(seg_id),
+            cv=cv,
+            global_map=global_map,
+            always_detect_axon=True,
+            add_stats=False,
+            verbose=True
+        )
+    except ArborRunError:
+        raise
+    except Exception as exc:
+        raise ArborRunError(
+            f"Morphopy pipeline failed for seg {seg_id}: {exc}",
+            code="morphopy-failed",
+        ) from exc
+
+    mesh = result.get("mesh")
+    skel = result.get("skel")
+    if mesh is None or skel is None:
+        raise ArborRunError(
+            f"Morphopy pipeline did not provide mesh and skeleton for seg {seg_id}.",
+            code="morphopy-failed",
+        )
+
+    try:
+        mesh_path.write_bytes(mesh.to_obj())
+    except Exception as exc:
+        raise ArborRunError(
+            f"Failed to write {mesh_path.name} for seg {seg_id}: {exc}",
+            code="morphopy-write-failed",
+        ) from exc
+
+    try:
+        to_swc(skel, swc_path, include_header=True, include_meta=True)
+    except Exception as exc:
+        raise ArborRunError(
+            f"Failed to write {swc_path.name} for seg {seg_id}: {exc}",
+            code="morphopy-write-failed",
+        ) from exc
+
+    try:
+        stats = compute_stats_fn(skel=skel)
+    except Exception as exc:
+        raise ArborRunError(
+            f"Failed to compute morphopy stats for seg {seg_id}: {exc}",
+            code="morphopy-failed",
+        ) from exc
+
+    payload = {
+        "segment_id": seg_id,
+        "stats": stats,
+        "units": None,
+        "stats_method": "morphopy",
+    }
+    with open(out_pkl, "wb") as f:
+        pickle.dump(payload, f, protocol=pickle.HIGHEST_PROTOCOL)
+
+    return out_pkl
+
+
 # ---------------------------
 # DISPATCH + PARALLEL DRIVER
 # ---------------------------
@@ -187,6 +371,7 @@ def _decide_tasks_for_seg(
     mode: str,
     overwrite: bool,
     new_only: bool,
+    stats_method: str,
 ) -> Tuple[bool, bool]:
     """
     Returns (need_flatone, need_arbor_stats) booleans for this seg_id.
@@ -194,8 +379,9 @@ def _decide_tasks_for_seg(
     - overwrite: force recompute
     - new_only: only compute when outputs are missing
     """
-    want_flat   = mode in ("both", "flatone-only")
-    want_arbor  = mode in ("both", "arbor-only")
+    want_flat = stats_method == "flatone" and mode in ("both", "flatone-only")
+    want_arbor = mode in ("both", "arbor-only")
+    stats_exists_fn = _arbor_stats_exists if stats_method == "flatone" else _morphopy_stats_exists
 
     if overwrite:
         return (want_flat, want_arbor)
@@ -203,7 +389,7 @@ def _decide_tasks_for_seg(
     # not overwriting: skip if existing (and if new_only is requested)
     if new_only:
         need_flat  = want_flat  and not _flatone_exists(root_output, seg_id)
-        need_arbor = want_arbor and not _arbor_stats_exists(root_output, seg_id)
+        need_arbor = want_arbor and not stats_exists_fn(root_output, seg_id)
         return (need_flat, need_arbor)
 
     # default non-overwrite: we let the underlying tasks short-circuit if they see outputs
@@ -211,16 +397,20 @@ def _decide_tasks_for_seg(
 
 
 def _one_worker(args: tuple) -> tuple:
-    seg_id, root_output, mode, overwrite, new_only = args
+    seg_id, root_output, mode, overwrite, new_only, stats_method = args
     try:
-        need_flat, need_arbor = _decide_tasks_for_seg(seg_id, root_output, mode, overwrite, new_only)
-        
-        # Run flatone first if requested (stats may depend on SWC emitted by flatone)
-        if need_flat:
-            run_flattener(seg_id, root_output, overwrite=overwrite)
+        need_flat, need_arbor = _decide_tasks_for_seg(
+            seg_id, root_output, mode, overwrite, new_only, stats_method
+        )
 
-        if need_arbor:
-            compute_arbor_stats_for_seg(seg_id, root_output, overwrite=overwrite)
+        if stats_method == "flatone":
+            if need_flat:
+                run_flattener(seg_id, root_output, overwrite=overwrite)
+            if need_arbor:
+                compute_arbor_stats_for_seg(seg_id, root_output, overwrite=overwrite)
+        else:
+            if need_arbor:
+                compute_morphopy_stats_for_seg(seg_id, root_output, overwrite=overwrite)
 
         return ("ok", seg_id)
 
@@ -237,6 +427,10 @@ def _one_worker(args: tuple) -> tuple:
             return ("missing-skeleton", seg_id, msg)
         if code == "flatone-failed":
             return ("flatone-failed", seg_id, msg)
+        if code in ("missing-morphopy-deps", "morphopy-global-map-missing", "morphopy-global-map-error", "morphopy-cv-error"):
+            return (code, seg_id, msg)
+        if code in ("morphopy-failed", "morphopy-write-failed"):
+            return ("morphopy-failed", seg_id, msg)
         return ("err", seg_id, msg)
     except Exception as e:
         return ("err", seg_id, f"{type(e).__name__}: {e}")
@@ -247,14 +441,21 @@ def process_many(
     root_output: Path,
     overwrite: bool = False,
     jobs: int = 1,
-    mode: str = "both",       # NEW: "both" | "flatone-only" | "arbor-only"
-    new_only: bool = False,   # NEW: process only missing outputs when not overwriting
+    mode: str = "both",       # "both" | "flatone-only" | "arbor-only"
+    new_only: bool = False,   # process only missing outputs when not overwriting
+    stats_method: str = "flatone",
 ) -> None:
     """
     Backward-compatible entry point with two new keyword args:
       - mode: which tasks to run
       - new_only: only process segIDs missing required artifacts (when overwrite=False)
+      - stats_method: 'flatone' (default) or 'morphopy'
     """
+    if stats_method not in ("flatone", "morphopy"):
+        raise ValueError(f"Unknown stats_method '{stats_method}'")
+    if stats_method == "morphopy" and mode == "flatone-only":
+        raise ValueError("stats_method='morphopy' is incompatible with mode='flatone-only'")
+
     root_output = Path(root_output)
     root_output.mkdir(parents=True, exist_ok=True)
 
@@ -262,13 +463,17 @@ def process_many(
         "not_processed_seg_ids.txt",
         "arbor_stats_error_seg_ids.txt",
         "flatone_failed_seg_ids.txt",
+        "morphopy_failed_seg_ids.txt",
     }
     for f in root_output.glob("*.txt"):
         if f.name in tracked_markers:
             f.unlink()
 
     # Prepare work items for the pool
-    work = [(int(sid), root_output, mode, bool(overwrite), bool(new_only)) for sid in seg_ids]
+    work = [
+        (int(sid), root_output, mode, bool(overwrite), bool(new_only), stats_method)
+        for sid in seg_ids
+    ]
 
     ctx = mp.get_context("spawn")
     with ctx.Pool(processes=jobs) as pool:
@@ -278,6 +483,15 @@ def process_many(
             if kind == "No-CAVEclient-token-found":
                 _, sid, msg = res
                 print(f"SegID {sid} skipped: {msg}", file=sys.stderr)
+                break
+            if kind in (
+                "missing-morphopy-deps",
+                "morphopy-global-map-missing",
+                "morphopy-global-map-error",
+                "morphopy-cv-error",
+            ):
+                _, sid, msg = res
+                print(msg, file=sys.stderr)
                 break
             if kind == "ok":
                 # success for this seg_id
@@ -294,6 +508,11 @@ def process_many(
             if kind in ("missing-skeleton", "flatone-failed"):
                 _, sid, msg = res
                 (root_output / "flatone_failed_seg_ids.txt").open("a").write(f"{sid}\n")
+                (root_output / str(sid) / "arbor_stats_error.txt").write_text(msg)
+                continue
+            if kind == "morphopy-failed":
+                _, sid, msg = res
+                (root_output / "morphopy_failed_seg_ids.txt").open("a").write(f"{sid}\n")
                 (root_output / str(sid) / "arbor_stats_error.txt").write_text(msg)
                 continue
 

@@ -14,6 +14,8 @@ authors = [{ name = "Your Name", email = "you@example.com" }]
 # flatone is a runtime dependency; pip will install it for your users
 dependencies = [
   "flatone @ git+https://github.com/berenslab/flatone.git@main",
+  "astropy>=7.1.0",
+  "morphopy>=0.7.3",
   "numpy>=1.24",
   "shapely>=2.0",
   "pandas>=2.0",
