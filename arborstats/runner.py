@@ -1,8 +1,13 @@
 # arborStats/runner.py
 from __future__ import annotations
+import base64
+import json
+import math
+import sqlite3
 import sys
 import pickle
 import subprocess
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable, Tuple
 import multiprocessing as mp
@@ -180,6 +185,158 @@ def _write_run_error(root_output: Path, message: str) -> None:
         (Path(root_output) / "arbor_stats_run_error.txt").write_text(msg + "\n", encoding="utf-8")
     except Exception:
         pass
+
+
+# ---------------------------
+# SQL EXPORT HELPERS
+# ---------------------------
+
+def _jsonify_for_sql(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {str(k): _jsonify_for_sql(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_jsonify_for_sql(v) for v in value]
+    if isinstance(value, set):
+        return [_jsonify_for_sql(v) for v in value]
+    if isinstance(value, np.ndarray):
+        return _jsonify_for_sql(value.tolist())
+    if isinstance(value, np.generic):
+        return _jsonify_for_sql(value.item())
+    if isinstance(value, bytes):
+        return {"__bytes__": base64.b64encode(value).decode("ascii")}
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    if isinstance(value, (int, str, bool)) or value is None:
+        return value
+    return str(value)
+
+
+def export_stats_to_sqlite(
+    seg_ids: Iterable[int],
+    root_output: Path,
+    *,
+    stats_method: str,
+    sqlite_path: Path,
+) -> Path:
+    if stats_method not in ("flatone", "morphopy"):
+        raise ValueError(f"Unknown stats_method '{stats_method}'")
+    root_output = Path(root_output)
+    sqlite_path = Path(sqlite_path)
+    sqlite_path.parent.mkdir(parents=True, exist_ok=True)
+
+    conn = sqlite3.connect(sqlite_path)
+    try:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS arbor_stats (
+                segment_id INTEGER NOT NULL,
+                stats_method TEXT NOT NULL,
+                payload_pickle BLOB NOT NULL,
+                stats_json TEXT,
+                units_json TEXT,
+                source_pickle TEXT,
+                updated_at TEXT,
+                PRIMARY KEY (segment_id, stats_method)
+            )
+            """
+        )
+
+        run_ts = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+        inserted = 0
+        missing = 0
+
+        for seg_id in seg_ids:
+            pkl_name = MORPHOPY_STATS_NAME if stats_method == "morphopy" else "arbor_stats.pkl"
+            pkl_path = root_output / str(seg_id) / pkl_name
+            if not pkl_path.exists():
+                missing += 1
+                continue
+
+            try:
+                raw = pkl_path.read_bytes()
+                payload = pickle.loads(raw)
+            except Exception as exc:
+                print(f"Failed to read {pkl_path}: {exc}", file=sys.stderr)
+                continue
+
+            if isinstance(payload, dict):
+                stats = payload.get("stats")
+                units = payload.get("units")
+                method = payload.get("stats_method") or stats_method
+                segment_id = payload.get("segment_id", seg_id)
+            else:
+                stats = None
+                units = None
+                method = stats_method
+                segment_id = seg_id
+
+            stats_json = None
+            if stats is not None:
+                try:
+                    stats_json = json.dumps(_jsonify_for_sql(stats), sort_keys=True)
+                except Exception:
+                    stats_json = None
+
+            units_json = None
+            if units is not None:
+                try:
+                    units_json = json.dumps(_jsonify_for_sql(units), sort_keys=True)
+                except Exception:
+                    units_json = None
+
+            existing = conn.execute(
+                """
+                SELECT payload_pickle, stats_json, units_json
+                FROM arbor_stats
+                WHERE segment_id = ? AND stats_method = ?
+                """,
+                (int(segment_id), str(method)),
+            ).fetchone()
+            if existing is not None:
+                existing_payload = existing[0]
+                if isinstance(existing_payload, memoryview):
+                    existing_payload = existing_payload.tobytes()
+                if (
+                    existing_payload == raw
+                    and existing[1] == stats_json
+                    and existing[2] == units_json
+                ):
+                    continue
+
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO arbor_stats (
+                    segment_id,
+                    stats_method,
+                    payload_pickle,
+                    stats_json,
+                    units_json,
+                    source_pickle,
+                    updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    int(segment_id),
+                    str(method),
+                    sqlite3.Binary(raw),
+                    stats_json,
+                    units_json,
+                    str(pkl_path),
+                    run_ts,
+                ),
+            )
+            print(f"Inserted/updated seg_id={segment_id} into sqlite.")
+            inserted += 1
+
+        conn.commit()
+    finally:
+        conn.close()
+
+    print(f"SQLite export: wrote {inserted} row(s), missing {missing} pickle(s).")
+    return sqlite_path
 
 
 # ---------------------------

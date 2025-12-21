@@ -5,7 +5,7 @@ from pathlib import Path
 import sys
 import pandas as pd
 
-from .runner import process_many
+from .runner import export_stats_to_sqlite, process_many
 
 # Nice help formatting: show defaults and keep line breaks
 class _Fmt(argparse.ArgumentDefaultsHelpFormatter, argparse.RawTextHelpFormatter):
@@ -235,6 +235,14 @@ def build_parser() -> argparse.ArgumentParser:
             "'morphopy' runs the in-repo morphopy pipeline using cached global maps."
         ),
     )
+    p.add_argument(
+        "--export-sqlite",
+        action="store_true",
+        help=(
+            "If set, export per-segment arbor_stats.pkl into a SQLite database "
+            "under --output-dir."
+        ),
+    )
 
     # ---------- Overwrite policy (MUTUALLY EXCLUSIVE) ----------
     ow = p.add_argument_group(
@@ -311,6 +319,15 @@ def main(argv: list[str] | None = None) -> None:
         stats_method=args.stats_method,
         cell_classes=segid_cell_classes,
     )
+
+    if args.export_sqlite:
+        sqlite_path = args.output_dir / "arbor_stats.sqlite3"
+        export_stats_to_sqlite(
+            segids,
+            args.output_dir,
+            stats_method=args.stats_method,
+            sqlite_path=sqlite_path,
+        )
 
 if __name__ == "__main__":
     main()
