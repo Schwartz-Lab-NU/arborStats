@@ -157,6 +157,7 @@ def process_cell(
     results = {
         'mesh': mesh,
         'skel': skel,
+        'skel_raw': skel_raw.convert_unit(target_unit="μm"),
     }
 
     if add_stats:

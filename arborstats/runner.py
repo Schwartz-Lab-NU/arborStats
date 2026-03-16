@@ -37,6 +37,7 @@ _MORPHOPY_CV = None
 
 MORPHOPY_MESH_NAME = "mesh.obj"
 MORPHOPY_SWC_NAME = "skeleton_warped_morphopy.swc"
+MORPHOPY_SWC_RAW_NAME = "skeleton_raw_morphopy.swc"
 MORPHOPY_STATS_NAME = "arbor_stats_morphopy.pkl"
 
 
@@ -465,6 +466,7 @@ def compute_morphopy_stats_for_seg(
         error_file.unlink()
 
     mesh_path = segdir / MORPHOPY_MESH_NAME
+    swc_raw_path = segdir / MORPHOPY_SWC_RAW_NAME
     swc_path = segdir / MORPHOPY_SWC_NAME
     out_pkl = segdir / MORPHOPY_STATS_NAME
     if out_pkl.exists() and not overwrite:
@@ -497,6 +499,7 @@ def compute_morphopy_stats_for_seg(
 
     mesh = result.get("mesh")
     skel = result.get("skel")
+    skel_raw = result.get("skel_raw")
     if mesh is None or skel is None:
         raise ArborRunError(
             f"Morphopy pipeline did not provide mesh and skeleton for seg {seg_id}.",
@@ -516,6 +519,14 @@ def compute_morphopy_stats_for_seg(
     except Exception as exc:
         raise ArborRunError(
             f"Failed to write {swc_path.name} for seg {seg_id}: {exc}",
+            code="morphopy-write-failed",
+        ) from exc
+    
+    try:
+        to_swc(skel_raw, swc_raw_path, include_header=True, include_meta=True)
+    except Exception as exc:
+        raise ArborRunError(
+            f"Failed to write {swc_raw_path.name} for seg {seg_id}: {exc}",
             code="morphopy-write-failed",
         ) from exc
 
