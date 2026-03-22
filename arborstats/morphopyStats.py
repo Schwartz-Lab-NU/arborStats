@@ -154,10 +154,11 @@ def process_cell(
     if always_detect_axon and (cellclass != 'RGC'):
         detect_axon(skel=skel, ais_xyz_um=None, verbose=verbose)
 
+    skel_raw.convert_unit(target_unit="um")
     results = {
         'mesh': mesh,
         'skel': skel,
-        'skel_raw': skel_raw.convert_unit(target_unit="μm"),
+        'skel_raw': skel_raw,
     }
 
     if add_stats:
