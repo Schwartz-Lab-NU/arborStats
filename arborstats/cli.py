@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 import sys
+from urllib.parse import urlencode
 import pandas as pd
 
 from .runner import export_stats_to_sqlite, process_many
@@ -80,6 +81,17 @@ def _safe_parse_segids(series, name: str) -> list[int]:
         raise SystemExit(f"No usable segment IDs found in column '{name}'.")
     return values
 
+
+def _uniform_cell_classes(segids: list[int], args) -> dict[int, str | None] | None:
+    cell_class = getattr(args, "cell_class", None)
+    if cell_class is None:
+        return None
+    cell_class = str(cell_class).strip()
+    if not cell_class:
+        return None
+    return {segid: cell_class for segid in segids}
+
+
 def _read_segids_from_source(args) -> tuple[list[int], dict[int, str | None] | None]:
     """
     Read segids from explicit --segids, or from CSV/Google Sheet with user-provided
@@ -87,7 +99,8 @@ def _read_segids_from_source(args) -> tuple[list[int], dict[int, str | None] | N
     """
     # 1) Direct segids wins
     if args.segids:
-        return [int(s) for s in args.segids]
+        segids = [int(s) for s in args.segids]
+        return segids, _uniform_cell_classes(segids, args)
 
     usecols = _split_csvish(args.read_columns)   # None or list[str]
     dtypes = _parse_dtypes_option(args.dtypes)   # None or dict[str,str]
@@ -96,8 +109,11 @@ def _read_segids_from_source(args) -> tuple[list[int], dict[int, str | None] | N
 
     # 2) Google Sheet
     if args.google_sheet_id:
-        # Export the sheet as CSV; you can add a &gid=... if you need a specific tab.
-        url = f"https://docs.google.com/spreadsheets/d/{args.google_sheet_id}/export?format=csv"
+        params = {"format": "csv"}
+        google_sheet_gid = getattr(args, "google_sheet_gid", None)
+        if google_sheet_gid:
+            params["gid"] = str(google_sheet_gid)
+        url = f"https://docs.google.com/spreadsheets/d/{args.google_sheet_id}/export?{urlencode(params)}"
         df = pd.read_csv(url, usecols=usecols, dtype=dtypes)
 
     # 3) CSV
@@ -140,7 +156,7 @@ def _read_segids_from_source(args) -> tuple[list[int], dict[int, str | None] | N
             raise SystemExit(f"No usable segment IDs found in column '{segid_col}'.")
     else:
         segids = _safe_parse_segids(df[segid_col], segid_col)
-        cell_classes = None
+        cell_classes = _uniform_cell_classes(segids, args)
 
     print(len(segids))
     print(len(list(set(segids))))
@@ -168,6 +184,12 @@ def build_parser() -> argparse.ArgumentParser:
     gsrc.add_argument("--segids", nargs="+", help="one or more segment IDs")
     gsrc.add_argument("--google-sheet-id", help="Google Sheet ID to read")
     gsrc.add_argument("--csv", type=Path, help="CSV path containing segment IDs")
+    p.add_argument(
+        "--google-sheet-gid",
+        "--gid",
+        dest="google_sheet_gid",
+        help="Google Sheet tab gid to read when using --google-sheet-id",
+    )
 
     # Extra source-related helpers (not mutually exclusive)
     # ---- schema controls for CSV/Sheets ----
@@ -205,6 +227,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--cell-class-col",
                    default="Cell Class",
                    help="Column name containing cell class labels (optional)")
+    p.add_argument("--cell-class",
+                   default=None,
+                   help=(
+                       "Cell class label to use for every segment ID when "
+                       "--cell-class-col is missing or not present in the input"
+                   ))
 
     
     p.add_argument("--status-filter", 

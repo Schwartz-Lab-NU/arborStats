@@ -68,6 +68,7 @@ arborstats \
 ```bash
 arborstats \
   --google-sheet-id 1o4i53h92oyzsBc8jEWKmF8ZnfyXKXtFCTaYSecs8tBk \
+  --gid 0 \
   --read-columns "Status" "Final SegID" "Cell Requires Review" \
   --dtypes "Final SegID=Int64" "Status=string" "Cell Requires Review=string" \
   --segid-col "Final SegID" \
@@ -94,6 +95,7 @@ usage: arborstats (--segids ... | --google-sheet-id ... | --csv CSV) --output-di
 Input source (choose exactly one) — mutually exclusive
   --segids SEGID [SEGID ...]   One or more segment IDs
   --google-sheet-id ID         Google Sheet ID to read (CSV export URL is inferred)
+  --google-sheet-gid GID       Google Sheet tab gid to read; alias: --gid
   --csv PATH                   CSV path containing segment IDs
 
 Schema controls
@@ -105,6 +107,7 @@ Column names & filters
   --status-col NAME              Status column name (default: "Status")
   --cell-review-col NAME         Cell-review column name (default: "Cell Requires Review")
   --cell-class-col NAME          Column containing cell-class labels (default: "Cell Class")
+  --cell-class NAME              Cell class label to use for every segment ID when no cell-class column is present
   --status-filter ...            Values to include from the status column (default: Complete, "Complete (cut off)")
   --cell-review-filter ...       Values to include from the cell-review column (default: FALSE)
   --csv-col NAME                 (deprecated) overrides --segid-col when using --csv
