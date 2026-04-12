@@ -95,7 +95,12 @@ def _morphopy_stats_exists(root_output: Path, seg_id: int) -> bool:
     d = _seg_dir(root_output, seg_id)
     if not d.exists():
         return False
-    return (d / MORPHOPY_STATS_NAME).exists()
+    mesh, skel, skel_raw = d / MORPHOPY_MESH_NAME, d / MORPHOPY_SWC_NAME, d / MORPHOPY_SWC_RAW_NAME
+    stats = d / MORPHOPY_STATS_NAME
+    if mesh.exists() and skel.exists() and skel_raw.exists() and stats.exists():
+        print("Found morphopy outputs for seg_id", seg_id)
+        return True
+    return False
 
 
 def _ensure_morphopy_modules() -> dict[str, Any]:
@@ -458,6 +463,8 @@ def compute_morphopy_stats_for_seg(
     Compute meshes/skeletons using the morphopy pipeline (process_cell) and persist
     stats computed via compute_stats from morphopyStats.py.
     """
+
+    print("Computing morphopy stats for seg_id", seg_id)
     segdir = _seg_dir(root_output, seg_id)
     segdir.mkdir(parents=True, exist_ok=True)
 
@@ -469,8 +476,8 @@ def compute_morphopy_stats_for_seg(
     swc_raw_path = segdir / MORPHOPY_SWC_RAW_NAME
     swc_path = segdir / MORPHOPY_SWC_NAME
     out_pkl = segdir / MORPHOPY_STATS_NAME
-    if out_pkl.exists() and not overwrite:
-        return out_pkl
+    #if out_pkl.exists() and not overwrite:
+    #    return out_pkl
 
     funcs = _ensure_morphopy_modules()
     process_cell = funcs["process_cell"]
