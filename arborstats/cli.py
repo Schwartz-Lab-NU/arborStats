@@ -160,9 +160,6 @@ def _read_segids_from_source(args) -> tuple[list[int], dict[int, str | None] | N
 
     print(len(segids))
     print(len(list(set(segids))))
-    segids = segids[:10]
-    print(len(segids))
-    print(len(list(set(segids))))
     return segids, cell_classes
 
 
