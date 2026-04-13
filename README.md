@@ -88,6 +88,17 @@ arborstats \
   --output-dir ./out
 ```
 
+- Export existing per-segment stats to SQLite without running processing:
+```bash
+arborstats \
+  --csv data/segids.csv \
+  --read-columns "SegID" \
+  --dtypes "SegID=Int64" \
+  --segid-col "SegID" \
+  --output-dir ./out \
+  --export-only
+```
+
 ## CLI 
 ```bash
 usage: arborstats (--segids ... | --google-sheet-id ... | --csv CSV) --output-dir PATH [options]
@@ -118,6 +129,7 @@ Common
   --stats-method {flatone,morphopy}
                                   'flatone' (default) runs flatone + arborStatsFromSkeleton.
                                   'morphopy' runs the in-repo morphopy pipeline using the bundled global map.
+  --export-sqlite                Export per-segment stats to SQLite after processing
 
 Overwrite policy — mutually exclusive
   --overwrite-all                Force recompute even if outputs exist
@@ -127,6 +139,7 @@ Which tasks to run — mutually exclusive
   --flatone-arbor-stats-both     Run flatone and compute arbor stats (default)
   --arbor-stats-only             Compute only arbor stats (expects existing SWC)
   --flatone-only                 Run flatone only (skip arbor stats)
+  --export-only                  Skip processing and export existing arbor stats to SQLite
 
 ```
 

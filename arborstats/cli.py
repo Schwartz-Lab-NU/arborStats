@@ -160,6 +160,9 @@ def _read_segids_from_source(args) -> tuple[list[int], dict[int, str | None] | N
 
     print(len(segids))
     print(len(list(set(segids))))
+    segids = segids[:10]
+    print(len(segids))
+    print(len(list(set(segids))))
     return segids, cell_classes
 
 
@@ -310,6 +313,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Run flatone only; skip arbor stats"
     )
+    mg.add_argument(
+        "--export-only",
+        action="store_true",
+        help="Skip processing and export existing arbor stats to SQLite"
+    )
     
     return p
 
@@ -322,33 +330,39 @@ def main(argv: list[str] | None = None) -> None:
         print("No segment IDs found.", file=sys.stderr)
         sys.exit(2)
 
-    # Derive mode (default is both)
-    if getattr(args, "arbor_stats_only", False):
-        mode = "arbor-only"
-    elif getattr(args, "flatone_only", False):
-        mode = "flatone-only"
-    else:
-        mode = "both"  # default or when --flatone-arbor-stats-both is set
+    should_export_sqlite = bool(args.export_sqlite or args.export_only)
 
-    # Map overwrite policy
-    overwrite = bool(getattr(args, "overwrite_all", False))
-    new_only = bool(getattr(args, "new_only", False))
+    if args.export_only and (args.overwrite_all or args.new_only):
+        parser.error("--export-only cannot be combined with --overwrite-all or --new-only")
 
-    if args.stats_method == "morphopy" and mode == "flatone-only":
-        parser.error("--stats-method=morphopy cannot be combined with --flatone-only")
+    if not args.export_only:
+        # Derive mode (default is both)
+        if getattr(args, "arbor_stats_only", False):
+            mode = "arbor-only"
+        elif getattr(args, "flatone_only", False):
+            mode = "flatone-only"
+        else:
+            mode = "both"  # default or when --flatone-arbor-stats-both is set
 
-    process_many(
-        segids,
-        args.output_dir,
-        overwrite=overwrite,
-        jobs=args.jobs,
-        mode=mode,
-        new_only=new_only,
-        stats_method=args.stats_method,
-        cell_classes=segid_cell_classes,
-    )
+        # Map overwrite policy
+        overwrite = bool(getattr(args, "overwrite_all", False))
+        new_only = bool(getattr(args, "new_only", False))
 
-    if args.export_sqlite:
+        if args.stats_method == "morphopy" and mode == "flatone-only":
+            parser.error("--stats-method=morphopy cannot be combined with --flatone-only")
+
+        process_many(
+            segids,
+            args.output_dir,
+            overwrite=overwrite,
+            jobs=args.jobs,
+            mode=mode,
+            new_only=new_only,
+            stats_method=args.stats_method,
+            cell_classes=segid_cell_classes,
+        )
+
+    if should_export_sqlite:
         sqlite_path = args.output_dir / "arbor_stats.sqlite3"
         export_stats_to_sqlite(
             segids,
