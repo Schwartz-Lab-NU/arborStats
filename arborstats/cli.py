@@ -163,6 +163,16 @@ def _read_segids_from_source(args) -> tuple[list[int], dict[int, str | None] | N
     return segids, cell_classes
 
 
+def _resolve_export_sqlite_path(args) -> Path:
+    export_file = getattr(args, "export_file", None)
+    if export_file is None:
+        return args.output_dir / "arbor_stats.sqlite3"
+    export_path = Path(export_file)
+    if not export_path.is_absolute():
+        export_path = args.output_dir / export_path
+    return export_path
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="arborstats",
@@ -271,6 +281,15 @@ def build_parser() -> argparse.ArgumentParser:
             "under --output-dir."
         ),
     )
+    p.add_argument(
+        "--export-file",
+        type=Path,
+        default=None,
+        help=(
+            "SQLite filename/path to write during export. Relative paths are "
+            "resolved under --output-dir."
+        ),
+    )
 
     # ---------- Overwrite policy (MUTUALLY EXCLUSIVE) ----------
     ow = p.add_argument_group(
@@ -331,6 +350,8 @@ def main(argv: list[str] | None = None) -> None:
 
     if args.export_only and (args.overwrite_all or args.new_only):
         parser.error("--export-only cannot be combined with --overwrite-all or --new-only")
+    if args.export_file is not None and not should_export_sqlite:
+        parser.error("--export-file requires --export-sqlite or --export-only")
 
     if not args.export_only:
         # Derive mode (default is both)
@@ -360,7 +381,8 @@ def main(argv: list[str] | None = None) -> None:
         )
 
     if should_export_sqlite:
-        sqlite_path = args.output_dir / "arbor_stats.sqlite3"
+        sqlite_path = _resolve_export_sqlite_path(args)
+        print(f"Exporting to SQLite at: {sqlite_path}")
         export_stats_to_sqlite(
             segids,
             args.output_dir,

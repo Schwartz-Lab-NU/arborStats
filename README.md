@@ -96,7 +96,8 @@ arborstats \
   --dtypes "SegID=Int64" \
   --segid-col "SegID" \
   --output-dir ./out \
-  --export-only
+  --export-only \
+  --export-file custom_stats.sqlite3
 ```
 
 ## CLI 
@@ -130,6 +131,7 @@ Common
                                   'flatone' (default) runs flatone + arborStatsFromSkeleton.
                                   'morphopy' runs the in-repo morphopy pipeline using the bundled global map.
   --export-sqlite                Export per-segment stats to SQLite after processing
+  --export-file PATH             SQLite filename/path to write during export; relative paths use --output-dir
 
 Overwrite policy — mutually exclusive
   --overwrite-all                Force recompute even if outputs exist
