@@ -179,7 +179,7 @@ cython_debug/
 #  refer to https://docs.cursor.com/context/ignore-files
 .cursorignore
 .cursorindexingignore
-.vscode/settings.json
+.vscode/
 
 # macOS
 .DS_Store
