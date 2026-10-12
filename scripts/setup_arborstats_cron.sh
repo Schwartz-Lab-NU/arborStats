@@ -69,6 +69,7 @@ COMMON_ARGS=(
     --google-sheet-id "\$SHEET_ID"
     --read-columns 'Latest SegID' 'Status' 'Cell Class'
     --segid-col 'Latest SegID'
+    --cell-class-col 'Cell Class'
     --dtypes 'Latest SegID=string' 'Status=string' 'Cell Class=string'
     --output-dir "\$OUTPUT_DIR"
     -j 18
