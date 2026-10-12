@@ -179,7 +179,7 @@ def _get_cloudvolume():
     return _MORPHOPY_CV
 
 
-def _write_run_error(root_output: Path, message: str) -> None:
+def _write_run_error(root_output: Path, message: str, run_stamp: str) -> None:
     """
     Persist a fatal orchestrator-level error message so users can inspect it even
     if stdout/stderr were truncated (e.g., due to multiprocessing).
@@ -188,7 +188,7 @@ def _write_run_error(root_output: Path, message: str) -> None:
     if not msg:
         return
     try:
-        (Path(root_output) / "arbor_stats_run_error.txt").write_text(msg + "\n", encoding="utf-8")
+        (Path(root_output) / f"arbor_stats_run_error_{run_stamp}.txt").write_text(msg + "\n", encoding="utf-8")
     except Exception:
         pass
 
@@ -663,15 +663,12 @@ def process_many(
     root_output = Path(root_output)
     root_output.mkdir(parents=True, exist_ok=True)
 
-    tracked_markers = {
-        "not_processed_seg_ids.txt",
-        "arbor_stats_error_seg_ids.txt",
-        "flatone_failed_seg_ids.txt",
-        "morphopy_failed_seg_ids.txt",
-    }
-    for f in root_output.glob("*.txt"):
-        if f.name in tracked_markers:
-            f.unlink()
+    # Each run writes its own timestamped marker files, so earlier runs' lists are kept.
+    run_stamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+
+    def _append_seg_id(marker: str, sid: int) -> None:
+        with (root_output / f"{marker}_{run_stamp}.txt").open("a") as f:
+            f.write(f"{sid}\n")
 
     # Prepare work items for the pool
     class_map = {int(k): v for k, v in (cell_classes or {}).items()}
@@ -695,7 +692,7 @@ def process_many(
             
             if kind == "No-CAVEclient-token-found":
                 _, sid, msg = res
-                _write_run_error(root_output, f"SegID {sid} skipped: {msg}")
+                _write_run_error(root_output, f"SegID {sid} skipped: {msg}", run_stamp)
                 print(f"SegID {sid} skipped: {msg}", file=sys.stderr)
                 break
             if kind in (
@@ -705,7 +702,7 @@ def process_many(
                 "morphopy-cv-error",
             ):
                 _, sid, msg = res
-                _write_run_error(root_output, msg)
+                _write_run_error(root_output, msg, run_stamp)
                 print(msg, file=sys.stderr)
                 break
             if kind == "ok":
@@ -716,22 +713,22 @@ def process_many(
             if kind == "no-mesh":
                 _, sid, msg = res
                 # Track segIDs that could not be processed due to missing mesh/SWC
-                (root_output / "not_processed_seg_ids.txt").open("a").write(f"{sid}\n")
+                _append_seg_id("not_processed_seg_ids", sid)
                 # Optionally keep a per-seg note:
                 (root_output / str(sid) / "arbor_stats_error.txt").write_text(msg)
                 continue
             if kind in ("missing-skeleton", "flatone-failed"):
                 _, sid, msg = res
-                (root_output / "flatone_failed_seg_ids.txt").open("a").write(f"{sid}\n")
+                _append_seg_id("flatone_failed_seg_ids", sid)
                 (root_output / str(sid) / "arbor_stats_error.txt").write_text(msg)
                 continue
             if kind == "morphopy-failed":
                 _, sid, msg = res
-                (root_output / "morphopy_failed_seg_ids.txt").open("a").write(f"{sid}\n")
+                _append_seg_id("morphopy_failed_seg_ids", sid)
                 (root_output / str(sid) / "arbor_stats_error.txt").write_text(msg)
                 continue
 
             # kind == "err"
             _, sid, msg = res
             (root_output / str(sid) / "arbor_stats_error.txt").write_text(msg)
-            (root_output / "arbor_stats_error_seg_ids.txt").open("a").write(f"{sid}\n")
+            _append_seg_id("arbor_stats_error_seg_ids", sid)

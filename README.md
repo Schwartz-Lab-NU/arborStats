@@ -159,8 +159,8 @@ out/
 │  ├─ arbor_stats_morphopy.pkl      # stats when using morphopy backend
 │  ├─ arbor_stats_error.txt         # present only if an error occurred
 │  ├─ *                             # other files from flatone outputs (not so important)
-├─ arbor_stats_error_seg_ids.txt    # segIDs which errored during arbor stats computation
-├─ not_processed_seg_ids.txt        # segIDs skipped (e.g., no meshes found)
+├─ arbor_stats_error_seg_ids_<YYYY-MM-DD_HH-MM-SS>.txt  # segIDs which errored during arbor stats computation (one file per run)
+├─ not_processed_seg_ids_<YYYY-MM-DD_HH-MM-SS>.txt      # segIDs skipped, e.g., no meshes found (one file per run)
 ```
 
 ## Morphopy backend
