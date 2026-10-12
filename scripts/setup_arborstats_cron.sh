@@ -98,11 +98,12 @@ run "All Cells" --gid 1690313708
 run "All BCs"   --gid 1528488002
 run "All Glia"  --gid 2051269861
 
+SQLITE_DEST="\$OUTPUT_DIR/arbor_stats_op"
 if [[ -f "\$SQLITE_FILE" ]]; then
-    if cp "\$SQLITE_FILE" "\$OUTPUT_DIR/"; then
-        echo "\$(date "+%F %T") copied \$SQLITE_FILE to \$OUTPUT_DIR/"
+    if mkdir -p "\$SQLITE_DEST" && cp "\$SQLITE_FILE" "\$SQLITE_DEST/"; then
+        echo "\$(date "+%F %T") copied \$SQLITE_FILE to \$SQLITE_DEST/"
     else
-        echo "\$(date "+%F %T") FAILED to copy \$SQLITE_FILE to \$OUTPUT_DIR/"
+        echo "\$(date "+%F %T") FAILED to copy \$SQLITE_FILE to \$SQLITE_DEST/"
         status=1
     fi
 fi
