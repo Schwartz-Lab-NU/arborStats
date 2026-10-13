@@ -37,6 +37,9 @@ set -uo pipefail
 
 ARBORSTATS="$ARBORSTATS_BIN"
 export PATH="$(dirname "$ARBORSTATS_BIN"):\$PATH"
+# Write Python output to the log immediately (workers inherit this), instead of
+# in buffered chunks that are lost if a process is killed.
+export PYTHONUNBUFFERED=1
 LOG_DIR="$LOG_DIR"
 OUTPUT_DIR="\$HOME/gcs-bucket"
 # SQLite is written locally (gcsfuse handles SQLite writes poorly) and copied
