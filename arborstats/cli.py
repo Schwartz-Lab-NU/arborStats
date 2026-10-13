@@ -274,6 +274,15 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     p.add_argument(
+        "--run-label",
+        default=None,
+        help=(
+            "Name for this run (e.g. 'All Cells'), used as a prefix on the run's "
+            ".txt marker files. Old marker files with the same label are deleted "
+            "at the start of each run."
+        ),
+    )
+    p.add_argument(
         "--export-sqlite",
         action="store_true",
         help=(
@@ -378,6 +387,7 @@ def main(argv: list[str] | None = None) -> None:
             new_only=new_only,
             stats_method=args.stats_method,
             cell_classes=segid_cell_classes,
+            run_label=args.run_label,
         )
 
     if should_export_sqlite:

@@ -6,6 +6,7 @@ import math
 import sqlite3
 import sys
 import pickle
+import re
 import subprocess
 from datetime import datetime
 from pathlib import Path
@@ -179,7 +180,7 @@ def _get_cloudvolume():
     return _MORPHOPY_CV
 
 
-def _write_run_error(root_output: Path, message: str, run_stamp: str) -> None:
+def _write_run_error(path: Path, message: str) -> None:
     """
     Persist a fatal orchestrator-level error message so users can inspect it even
     if stdout/stderr were truncated (e.g., due to multiprocessing).
@@ -188,7 +189,7 @@ def _write_run_error(root_output: Path, message: str, run_stamp: str) -> None:
     if not msg:
         return
     try:
-        (Path(root_output) / f"arbor_stats_run_error_{run_stamp}.txt").write_text(msg + "\n", encoding="utf-8")
+        Path(path).write_text(msg + "\n", encoding="utf-8")
     except Exception:
         pass
 
@@ -639,6 +640,22 @@ def _one_worker(args: tuple) -> tuple:
         return ("err", seg_id, f"{type(e).__name__}: {e}")
 
 
+# Run-level marker files written by process_many as <label>_<marker>_<timestamp>.txt
+_RUN_MARKERS = (
+    "not_processed_seg_ids",
+    "arbor_stats_error_seg_ids",
+    "flatone_failed_seg_ids",
+    "morphopy_failed_seg_ids",
+    "arbor_stats_run_error",
+)
+
+
+def _run_label_prefix(run_label: str | None) -> str:
+    """'All Cells' -> 'All_Cells_'; no label -> ''."""
+    label = re.sub(r"[^A-Za-z0-9]+", "_", run_label or "").strip("_")
+    return f"{label}_" if label else ""
+
+
 def process_many(
     seg_ids: Iterable[int],
     root_output: Path,
@@ -648,12 +665,14 @@ def process_many(
     new_only: bool = False,   # process only missing outputs when not overwriting
     stats_method: str = "flatone",
     cell_classes: dict[int, str | None] | None = None,
+    run_label: str | None = None,
 ) -> None:
     """
     Backward-compatible entry point with two new keyword args:
       - mode: which tasks to run
       - new_only: only process segIDs missing required artifacts (when overwrite=False)
       - stats_method: 'flatone' (default) or 'morphopy'
+      - run_label: prefix for this run's marker .txt files (e.g. 'All Cells')
     """
     if stats_method not in ("flatone", "morphopy"):
         raise ValueError(f"Unknown stats_method '{stats_method}'")
@@ -663,11 +682,24 @@ def process_many(
     root_output = Path(root_output)
     root_output.mkdir(parents=True, exist_ok=True)
 
-    # Each run writes its own timestamped marker files, so earlier runs' lists are kept.
+    # Delete marker files from earlier runs with the same label, so only the latest
+    # run's lists remain. Files of other labels sharing this output dir are kept.
+    prefix = _run_label_prefix(run_label)
+    old_marker = re.compile(
+        rf"^{re.escape(prefix)}({'|'.join(_RUN_MARKERS)})"
+        r"(_\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2})?\.txt$"
+    )
+    for f in root_output.glob("*.txt"):
+        if old_marker.match(f.name):
+            f.unlink()
+
     run_stamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
 
+    def _marker_path(marker: str) -> Path:
+        return root_output / f"{prefix}{marker}_{run_stamp}.txt"
+
     def _append_seg_id(marker: str, sid: int) -> None:
-        with (root_output / f"{marker}_{run_stamp}.txt").open("a") as f:
+        with _marker_path(marker).open("a") as f:
             f.write(f"{sid}\n")
 
     # Prepare work items for the pool
@@ -692,7 +724,7 @@ def process_many(
             
             if kind == "No-CAVEclient-token-found":
                 _, sid, msg = res
-                _write_run_error(root_output, f"SegID {sid} skipped: {msg}", run_stamp)
+                _write_run_error(_marker_path("arbor_stats_run_error"), f"SegID {sid} skipped: {msg}")
                 print(f"SegID {sid} skipped: {msg}", file=sys.stderr)
                 break
             if kind in (
@@ -702,7 +734,7 @@ def process_many(
                 "morphopy-cv-error",
             ):
                 _, sid, msg = res
-                _write_run_error(root_output, msg, run_stamp)
+                _write_run_error(_marker_path("arbor_stats_run_error"), msg)
                 print(msg, file=sys.stderr)
                 break
             if kind == "ok":

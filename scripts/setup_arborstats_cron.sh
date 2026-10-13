@@ -88,7 +88,7 @@ run() {
     local name="\$1"; shift
     echo "===== \$(date "+%F %T") START \$name ====="
     local rc=0
-    "\$ARBORSTATS" "\${COMMON_ARGS[@]}" "\$@" || rc=\$?
+    "\$ARBORSTATS" "\${COMMON_ARGS[@]}" --run-label "\$name" "\$@" || rc=\$?
     if (( rc == 0 )); then
         echo "===== \$(date "+%F %T") DONE \$name ====="
     else
