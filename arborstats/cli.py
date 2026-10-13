@@ -300,6 +300,15 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     p.add_argument(
+        "--full-export",
+        action="store_true",
+        help=(
+            "Check every segID's pickle during export. By default, after processing, "
+            "only segIDs recomputed in this run or missing from the database are "
+            "exported. --export-only always checks every segID."
+        ),
+    )
+    p.add_argument(
         "--export-file",
         type=Path,
         default=None,
@@ -370,7 +379,10 @@ def main(argv: list[str] | None = None) -> None:
         parser.error("--export-only cannot be combined with --overwrite-all or --new-only")
     if args.export_file is not None and not should_export_sqlite:
         parser.error("--export-file requires --export-sqlite or --export-only")
+    if args.full_export and not should_export_sqlite:
+        parser.error("--full-export requires --export-sqlite or --export-only")
 
+    recomputed = None
     if not args.export_only:
         # Derive mode (default is both)
         if getattr(args, "arbor_stats_only", False):
@@ -387,7 +399,7 @@ def main(argv: list[str] | None = None) -> None:
         if args.stats_method == "morphopy" and mode == "flatone-only":
             parser.error("--stats-method=morphopy cannot be combined with --flatone-only")
 
-        process_many(
+        recomputed = process_many(
             segids,
             args.output_dir,
             overwrite=overwrite,
@@ -408,6 +420,7 @@ def main(argv: list[str] | None = None) -> None:
             args.output_dir,
             stats_method=args.stats_method,
             sqlite_path=sqlite_path,
+            recomputed=None if args.full_export else recomputed,
         )
 
 if __name__ == "__main__":

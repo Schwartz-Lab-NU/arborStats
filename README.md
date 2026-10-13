@@ -132,6 +132,8 @@ Common
                                   'morphopy' runs the in-repo morphopy pipeline using the bundled global map.
   --export-sqlite                Export per-segment stats to SQLite after processing
   --export-file PATH             SQLite filename/path to write during export; relative paths use --output-dir
+  --full-export                  Check every segID's pickle during export (default after processing: only segIDs
+                                  recomputed in this run or missing from the database)
   --run-label NAME               Prefix for this run's .txt marker files (e.g. "All Cells"); old files with the
                                   same label are deleted at the start of each run
   --marker-dir PATH              Where to write the .txt marker files (default: --output-dir)

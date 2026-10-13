@@ -8,6 +8,8 @@ import sys
 import pickle
 import re
 import subprocess
+import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable, Tuple
@@ -220,18 +222,71 @@ def _jsonify_for_sql(value: Any) -> Any:
     return str(value)
 
 
+def _load_stats_pickle(pkl_path: Path, seg_id: int, stats_method: str) -> tuple:
+    """
+    Read one stats pickle and prepare its row values. Runs in a worker thread, so
+    the slow reads (often over gcsfuse) overlap instead of happening one by one.
+    """
+    if not pkl_path.exists():
+        return ("missing",)
+    try:
+        raw = pkl_path.read_bytes()
+        payload = pickle.loads(raw)
+    except Exception as exc:
+        print(f"Failed to read {pkl_path}: {exc}", file=sys.stderr)
+        return ("failed",)
+
+    if isinstance(payload, dict):
+        stats = payload.get("stats")
+        units = payload.get("units")
+        method = payload.get("stats_method") or stats_method
+        segment_id = payload.get("segment_id", seg_id)
+    else:
+        stats = None
+        units = None
+        method = stats_method
+        segment_id = seg_id
+
+    stats_json = None
+    if stats is not None:
+        try:
+            stats_json = json.dumps(_jsonify_for_sql(stats), sort_keys=True)
+        except Exception:
+            stats_json = None
+
+    units_json = None
+    if units is not None:
+        try:
+            units_json = json.dumps(_jsonify_for_sql(units), sort_keys=True)
+        except Exception:
+            units_json = None
+
+    return ("ok", int(segment_id), str(method), raw, stats_json, units_json)
+
+
 def export_stats_to_sqlite(
     seg_ids: Iterable[int],
     root_output: Path,
     *,
     stats_method: str,
     sqlite_path: Path,
+    recomputed: Iterable[int] | None = None,
+    read_workers: int = 16,
 ) -> Path:
+    """
+    Upsert per-segment stats pickles into SQLite.
+      - recomputed: segIDs whose stats were recomputed in this run. When given, only
+        these and segIDs not yet in the database are read; the rest are assumed
+        unchanged and skipped without touching their pickles. None checks every segID.
+      - read_workers: threads used to read pickles in parallel.
+    """
     if stats_method not in ("flatone", "morphopy"):
         raise ValueError(f"Unknown stats_method '{stats_method}'")
     root_output = Path(root_output)
     sqlite_path = Path(sqlite_path)
     sqlite_path.parent.mkdir(parents=True, exist_ok=True)
+    seg_ids = [int(s) for s in seg_ids]
+    started = time.monotonic()
 
     conn = sqlite3.connect(sqlite_path)
     try:
@@ -252,97 +307,95 @@ def export_stats_to_sqlite(
 
         run_ts = datetime.utcnow().isoformat(timespec="seconds") + "Z"
         inserted = 0
+        unchanged = 0
         missing = 0
+        failed = 0
 
-        for seg_id in seg_ids:
-            pkl_name = MORPHOPY_STATS_NAME if stats_method == "morphopy" else "arbor_stats.pkl"
-            pkl_path = root_output / str(seg_id) / pkl_name
-            if not pkl_path.exists():
-                missing += 1
-                continue
-
-            try:
-                raw = pkl_path.read_bytes()
-                payload = pickle.loads(raw)
-            except Exception as exc:
-                print(f"Failed to read {pkl_path}: {exc}", file=sys.stderr)
-                continue
-
-            if isinstance(payload, dict):
-                stats = payload.get("stats")
-                units = payload.get("units")
-                method = payload.get("stats_method") or stats_method
-                segment_id = payload.get("segment_id", seg_id)
-            else:
-                stats = None
-                units = None
-                method = stats_method
-                segment_id = seg_id
-
-            stats_json = None
-            if stats is not None:
-                try:
-                    stats_json = json.dumps(_jsonify_for_sql(stats), sort_keys=True)
-                except Exception:
-                    stats_json = None
-
-            units_json = None
-            if units is not None:
-                try:
-                    units_json = json.dumps(_jsonify_for_sql(units), sort_keys=True)
-                except Exception:
-                    units_json = None
-
-            existing = conn.execute(
-                """
-                SELECT payload_pickle, stats_json, units_json
-                FROM arbor_stats
-                WHERE segment_id = ? AND stats_method = ?
-                """,
-                (int(segment_id), str(method)),
-            ).fetchone()
-            if existing is not None:
-                existing_payload = existing[0]
-                if isinstance(existing_payload, memoryview):
-                    existing_payload = existing_payload.tobytes()
-                if (
-                    existing_payload == raw
-                    and existing[1] == stats_json
-                    and existing[2] == units_json
-                ):
-                    continue
-
-            conn.execute(
-                """
-                INSERT OR REPLACE INTO arbor_stats (
-                    segment_id,
-                    stats_method,
-                    payload_pickle,
-                    stats_json,
-                    units_json,
-                    source_pickle,
-                    updated_at
+        if recomputed is not None:
+            recomputed = {int(s) for s in recomputed}
+            in_db = {
+                row[0]
+                for row in conn.execute(
+                    "SELECT segment_id FROM arbor_stats WHERE stats_method = ?",
+                    (stats_method,),
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    int(segment_id),
-                    str(method),
-                    sqlite3.Binary(raw),
-                    stats_json,
-                    units_json,
-                    str(pkl_path),
-                    run_ts,
-                ),
+            }
+            to_check = [s for s in seg_ids if s in recomputed or s not in in_db]
+        else:
+            to_check = seg_ids
+
+        pkl_name = MORPHOPY_STATS_NAME if stats_method == "morphopy" else "arbor_stats.pkl"
+        pkl_paths = {s: root_output / str(s) / pkl_name for s in to_check}
+
+        with ThreadPoolExecutor(max_workers=max(1, read_workers)) as readers:
+            loaded_rows = readers.map(
+                lambda s: _load_stats_pickle(pkl_paths[s], s, stats_method), to_check
             )
-            print(f"Inserted/updated seg_id={segment_id} into sqlite.")
-            inserted += 1
+            for seg_id, loaded in zip(to_check, loaded_rows):
+                if loaded[0] == "missing":
+                    missing += 1
+                    continue
+                if loaded[0] == "failed":
+                    failed += 1
+                    continue
+                _, segment_id, method, raw, stats_json, units_json = loaded
+                pkl_path = pkl_paths[seg_id]
+
+                existing = conn.execute(
+                    """
+                    SELECT payload_pickle, stats_json, units_json
+                    FROM arbor_stats
+                    WHERE segment_id = ? AND stats_method = ?
+                    """,
+                    (segment_id, method),
+                ).fetchone()
+                if existing is not None:
+                    existing_payload = existing[0]
+                    if isinstance(existing_payload, memoryview):
+                        existing_payload = existing_payload.tobytes()
+                    if (
+                        existing_payload == raw
+                        and existing[1] == stats_json
+                        and existing[2] == units_json
+                    ):
+                        unchanged += 1
+                        continue
+
+                conn.execute(
+                    """
+                    INSERT OR REPLACE INTO arbor_stats (
+                        segment_id,
+                        stats_method,
+                        payload_pickle,
+                        stats_json,
+                        units_json,
+                        source_pickle,
+                        updated_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        segment_id,
+                        method,
+                        sqlite3.Binary(raw),
+                        stats_json,
+                        units_json,
+                        str(pkl_path),
+                        run_ts,
+                    ),
+                )
+                print(f"Inserted/updated seg_id={segment_id} into sqlite.")
+                inserted += 1
 
         conn.commit()
+        print(
+            f"SQLite export: read {len(to_check)} of {len(seg_ids)} segIDs, "
+            f"inserted/updated {inserted}, unchanged {unchanged}, missing {missing}, "
+            f"unreadable {failed}, in {time.monotonic() - started:.1f}s"
+        )
     finally:
         conn.close()
 
-    print(f"SQLite export: wrote {inserted} row(s), missing {missing} pickle(s).")
     return sqlite_path
 
 
@@ -616,7 +669,7 @@ def _one_worker(args: tuple) -> tuple:
                     overwrite=overwrite,
                 )
 
-        return ("ok", seg_id)
+        return ("ok", seg_id, need_arbor)
 
     except ArborRunError as e:
         # Something expected but absent (e.g., no mesh / no SWC).
@@ -667,7 +720,7 @@ def process_many(
     cell_classes: dict[int, str | None] | None = None,
     run_label: str | None = None,
     marker_dir: Path | None = None,
-) -> None:
+) -> set[int]:
     """
     Backward-compatible entry point with two new keyword args:
       - mode: which tasks to run
@@ -675,6 +728,7 @@ def process_many(
       - stats_method: 'flatone' (default) or 'morphopy'
       - run_label: prefix for this run's marker .txt files (e.g. 'All Cells')
       - marker_dir: where to write the marker .txt files (default: root_output)
+    Returns the segIDs whose stats were recomputed in this run.
     """
     if stats_method not in ("flatone", "morphopy"):
         raise ValueError(f"Unknown stats_method '{stats_method}'")
@@ -722,6 +776,7 @@ def process_many(
         for sid in seg_ids
     ]
 
+    recomputed: set[int] = set()
     ctx = mp.get_context("spawn")
     with ctx.Pool(processes=jobs) as pool:
         for res in pool.imap_unordered(_one_worker, work):
@@ -744,6 +799,9 @@ def process_many(
                 break
             if kind == "ok":
                 # success for this seg_id
+                _, sid, stats_written = res
+                if stats_written:
+                    recomputed.add(sid)
                 continue
 
             
@@ -769,3 +827,4 @@ def process_many(
             _, sid, msg = res
             (root_output / str(sid) / "arbor_stats_error.txt").write_text(msg)
             _append_seg_id("arbor_stats_error_seg_ids", sid)
+    return recomputed
