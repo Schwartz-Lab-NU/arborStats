@@ -666,6 +666,7 @@ def process_many(
     stats_method: str = "flatone",
     cell_classes: dict[int, str | None] | None = None,
     run_label: str | None = None,
+    marker_dir: Path | None = None,
 ) -> None:
     """
     Backward-compatible entry point with two new keyword args:
@@ -673,6 +674,7 @@ def process_many(
       - new_only: only process segIDs missing required artifacts (when overwrite=False)
       - stats_method: 'flatone' (default) or 'morphopy'
       - run_label: prefix for this run's marker .txt files (e.g. 'All Cells')
+      - marker_dir: where to write the marker .txt files (default: root_output)
     """
     if stats_method not in ("flatone", "morphopy"):
         raise ValueError(f"Unknown stats_method '{stats_method}'")
@@ -682,21 +684,24 @@ def process_many(
     root_output = Path(root_output)
     root_output.mkdir(parents=True, exist_ok=True)
 
+    marker_root = Path(marker_dir) if marker_dir is not None else root_output
+    marker_root.mkdir(parents=True, exist_ok=True)
+
     # Delete marker files from earlier runs with the same label, so only the latest
-    # run's lists remain. Files of other labels sharing this output dir are kept.
+    # run's lists remain. Files of other labels sharing this directory are kept.
     prefix = _run_label_prefix(run_label)
     old_marker = re.compile(
         rf"^{re.escape(prefix)}({'|'.join(_RUN_MARKERS)})"
         r"(_\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2})?\.txt$"
     )
-    for f in root_output.glob("*.txt"):
+    for f in marker_root.glob("*.txt"):
         if old_marker.match(f.name):
             f.unlink()
 
     run_stamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
 
     def _marker_path(marker: str) -> Path:
-        return root_output / f"{prefix}{marker}_{run_stamp}.txt"
+        return marker_root / f"{prefix}{marker}_{run_stamp}.txt"
 
     def _append_seg_id(marker: str, sid: int) -> None:
         with _marker_path(marker).open("a") as f:

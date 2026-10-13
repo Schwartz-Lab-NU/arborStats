@@ -283,6 +283,15 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     p.add_argument(
+        "--marker-dir",
+        type=Path,
+        default=None,
+        help=(
+            "Directory for the run's .txt marker files (segIDs that failed or were "
+            "skipped). Defaults to --output-dir."
+        ),
+    )
+    p.add_argument(
         "--export-sqlite",
         action="store_true",
         help=(
@@ -388,6 +397,7 @@ def main(argv: list[str] | None = None) -> None:
             stats_method=args.stats_method,
             cell_classes=segid_cell_classes,
             run_label=args.run_label,
+            marker_dir=args.marker_dir,
         )
 
     if should_export_sqlite:

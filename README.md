@@ -132,6 +132,9 @@ Common
                                   'morphopy' runs the in-repo morphopy pipeline using the bundled global map.
   --export-sqlite                Export per-segment stats to SQLite after processing
   --export-file PATH             SQLite filename/path to write during export; relative paths use --output-dir
+  --run-label NAME               Prefix for this run's .txt marker files (e.g. "All Cells"); old files with the
+                                  same label are deleted at the start of each run
+  --marker-dir PATH              Where to write the .txt marker files (default: --output-dir)
 
 Overwrite policy — mutually exclusive
   --overwrite-all                Force recompute even if outputs exist
@@ -162,6 +165,8 @@ out/
 ├─ <label>_arbor_stats_error_seg_ids_<YYYY-MM-DD_HH-MM-SS>.txt  # segIDs which errored during arbor stats computation
 ├─ <label>_not_processed_seg_ids_<YYYY-MM-DD_HH-MM-SS>.txt      # segIDs skipped, e.g., no meshes found
 ```
+
+The run-level `.txt` files go to `--marker-dir` instead when it is set.
 
 ## Morphopy backend
 

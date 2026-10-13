@@ -81,6 +81,7 @@ COMMON_ARGS=(
     --stats-method morphopy
     --export-sqlite
     --export-file "\$SQLITE_FILE"
+    --marker-dir "\$LOG_DIR"
 )
 
 status=0
@@ -101,13 +102,34 @@ run "All Cells" --gid 1690313708
 run "All BCs"   --gid 1528488002
 run "All Glia"  --gid 2051269861
 
-SQLITE_DEST="\$OUTPUT_DIR/arbor_stats_op"
-if [[ -f "\$SQLITE_FILE" ]]; then
-    if mkdir -p "\$SQLITE_DEST" && cp "\$SQLITE_FILE" "\$SQLITE_DEST/"; then
-        echo "\$(date "+%F %T") copied \$SQLITE_FILE to \$SQLITE_DEST/"
-    else
-        echo "\$(date "+%F %T") FAILED to copy \$SQLITE_FILE to \$SQLITE_DEST/"
-        status=1
+# Copy the finished SQLite file and the marker .txt files (segIDs that failed or
+# were skipped) to the bucket.
+BUCKET_DEST="\$OUTPUT_DIR/arbor_stats_op"
+if ! mkdir -p "\$BUCKET_DEST"; then
+    echo "\$(date "+%F %T") FAILED to create \$BUCKET_DEST"
+    status=1
+else
+    if [[ -f "\$SQLITE_FILE" ]]; then
+        if cp "\$SQLITE_FILE" "\$BUCKET_DEST/"; then
+            echo "\$(date "+%F %T") copied \$SQLITE_FILE to \$BUCKET_DEST/"
+        else
+            echo "\$(date "+%F %T") FAILED to copy \$SQLITE_FILE to \$BUCKET_DEST/"
+            status=1
+        fi
+    fi
+
+    # Mirror the local marker files: each run already deleted its own old ones
+    # locally, so replace the bucket's copies with the current local set.
+    shopt -s nullglob
+    markers=("\$LOG_DIR"/*_seg_ids_*.txt "\$LOG_DIR"/*arbor_stats_run_error_*.txt)
+    rm -f "\$BUCKET_DEST"/*_seg_ids_*.txt "\$BUCKET_DEST"/*arbor_stats_run_error_*.txt
+    if (( \${#markers[@]} )); then
+        if cp "\${markers[@]}" "\$BUCKET_DEST/"; then
+            echo "\$(date "+%F %T") copied \${#markers[@]} marker file(s) to \$BUCKET_DEST/"
+        else
+            echo "\$(date "+%F %T") FAILED to copy marker files to \$BUCKET_DEST/"
+            status=1
+        fi
     fi
 fi
 
