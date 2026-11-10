@@ -19,11 +19,13 @@ dependencies = [
   "numpy>=1.24",
   "shapely>=2.0",
   "pandas>=2.0",
-  "concave-hull>=0.0.7"   # import name: `concave_hull`
+  "concave-hull>=0.0.7",  # import name: `concave_hull`
+  "pyarrow>=11"           # bulk Parquet export read by the webapp
 ]
 
 [project.scripts]
 arborstats = "arborstats.cli:main"
+arborstats-bulk-export = "arborstats.bulk_export:main"
 
 [tool.hatch.build.targets.wheel]
 # Tell hatch to include the `arborstats/` package

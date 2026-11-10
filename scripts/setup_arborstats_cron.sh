@@ -27,6 +27,12 @@ if [[ -z "$ARBORSTATS_BIN" || ! -x "$ARBORSTATS_BIN" ]]; then
     echo "error: arborstats not found. Activate its environment or set ARBORSTATS_BIN." >&2
     exit 1
 fi
+# Installed next to `arborstats` by the same package (pip install -e . adds it).
+BULK_EXPORT_BIN="$(dirname "$ARBORSTATS_BIN")/arborstats-bulk-export"
+if [[ ! -x "$BULK_EXPORT_BIN" ]]; then
+    echo "error: $BULK_EXPORT_BIN not found. Reinstall arborstats (pip install -e .) to add it." >&2
+    exit 1
+fi
 
 mkdir -p "$(dirname "$RUNNER")" "$LOG_DIR"
 
@@ -36,6 +42,7 @@ cat > "$RUNNER" <<EOF
 set -uo pipefail
 
 ARBORSTATS="$ARBORSTATS_BIN"
+BULK_EXPORT="$BULK_EXPORT_BIN"
 export PATH="$(dirname "$ARBORSTATS_BIN"):\$PATH"
 # Write Python output to the log immediately (workers inherit this), instead of
 # in buffered chunks that are lost if a process is killed.
@@ -45,6 +52,9 @@ OUTPUT_DIR="\$HOME/gcs-bucket"
 # SQLite is written locally (gcsfuse handles SQLite writes poorly) and copied
 # to the bucket once all runs finish.
 SQLITE_FILE="\$HOME/arbor_stats_op/arbor_stats.sqlite3"
+# Compact copy of the scalar stats and distributions that the webapp loads for
+# multi-segment pages (see arborstats/bulk_export.py).
+BULK_FILE="\$HOME/arbor_stats_op/arbor_stats_bulk.parquet"
 SHEET_ID="1o4i53h92oyzsBc8jEWKmF8ZnfyXKXtFCTaYSecs8tBk"
 
 # Cron fires every midnight; only run on even days since the epoch so the
@@ -102,8 +112,21 @@ run "All Cells" --gid 1690313708
 run "All BCs"   --gid 1528488002
 run "All Glia"  --gid 2051269861
 
-# Copy the finished SQLite file and the marker .txt files (segIDs that failed or
-# were skipped) to the bucket.
+# Build the bulk Parquet file from the finished SQLite file.
+bulk_ok=0
+if [[ -f "\$SQLITE_FILE" ]]; then
+    echo "===== \$(date "+%F %T") START bulk parquet export ====="
+    if "\$BULK_EXPORT" "\$SQLITE_FILE" "\$BULK_FILE"; then
+        bulk_ok=1
+        echo "===== \$(date "+%F %T") DONE bulk parquet export ====="
+    else
+        echo "===== \$(date "+%F %T") FAILED bulk parquet export ====="
+        status=1
+    fi
+fi
+
+# Copy the finished SQLite file, the bulk Parquet file and the marker .txt files
+# (segIDs that failed or were skipped) to the bucket.
 BUCKET_DEST="\$OUTPUT_DIR/arbor_stats_op"
 if ! mkdir -p "\$BUCKET_DEST"; then
     echo "\$(date "+%F %T") FAILED to create \$BUCKET_DEST"
@@ -114,6 +137,16 @@ else
             echo "\$(date "+%F %T") copied \$SQLITE_FILE to \$BUCKET_DEST/"
         else
             echo "\$(date "+%F %T") FAILED to copy \$SQLITE_FILE to \$BUCKET_DEST/"
+            status=1
+        fi
+    fi
+
+    # Only copy a Parquet file built from this run's SQLite file.
+    if (( bulk_ok )); then
+        if cp "\$BULK_FILE" "\$BUCKET_DEST/"; then
+            echo "\$(date "+%F %T") copied \$BULK_FILE to \$BUCKET_DEST/"
+        else
+            echo "\$(date "+%F %T") FAILED to copy \$BULK_FILE to \$BUCKET_DEST/"
             status=1
         fi
     fi
