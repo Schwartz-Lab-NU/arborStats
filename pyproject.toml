@@ -26,6 +26,7 @@ dependencies = [
 [project.scripts]
 arborstats = "arborstats.cli:main"
 arborstats-bulk-export = "arborstats.bulk_export:main"
+arborstats-sheet-export = "arborstats.sheet_export:main"
 
 [tool.hatch.build.targets.wheel]
 # Tell hatch to include the `arborstats/` package
