@@ -7,7 +7,7 @@ name = "arborstats"                       # PyPI package name (normalized)
 version = "0.1.0"
 description = "Compute arbor statistics from flatone outputs (Eyewire II)."
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 license = { file = "LICENSE" }
 authors = [{ name = "Your Name", email = "you@example.com" }]
 
