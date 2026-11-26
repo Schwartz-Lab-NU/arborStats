@@ -62,6 +62,13 @@ def finalize_skel(
         )
         post_info['warp'] = post_info_warp
 
+        # Coverage needs the raw nodes aligned with the warped ones, which the class and reroot
+        # stages below do not keep: summarise it now. Stored in extra, which reroot carries over.
+        from ..features import compute_coverage_summary
+        coverage = compute_coverage_summary(skel, skel.extra['nodes_raw'], global_map)
+        skel.extra['coverage_summary'] = coverage
+        post_info['coverage'] = coverage
+
     if run_stage_class:
         if verbose:
             print("[finalize_skel] Finalizing skeleton - class_postprocess_skeleton...")

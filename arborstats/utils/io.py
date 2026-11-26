@@ -9,6 +9,24 @@ from morphopy.neurontree.utils import get_standardized_swc
 from skeliner import Skeleton
 
 
+def load_global_map(path) -> dict:
+    """Load a pywarper global map (.npz): the plain ``np.savez(**build_mapping(...))`` dumps of
+    pywarper < 0.3 and the ``pywarper.layers.save_map`` files of >= 0.3, whose ``meta`` /
+    ``provenance`` entries are JSON text. 0-d numeric entries come back as Python scalars."""
+    import json
+
+    with np.load(path, allow_pickle=True) as data:
+        mapping = {key: data[key] for key in data.files}
+    for key, value in mapping.items():
+        if value.ndim != 0:
+            continue
+        if key in ('meta', 'provenance') and value.dtype.kind in 'US':
+            mapping[key] = json.loads(str(value))
+        elif value.dtype.kind in 'iufbO':
+            mapping[key] = value.item()
+    return mapping
+
+
 def read_swc(swc_file, contains_zraw=False):
     f = lambda x: float(x.replace(",", "."))
 

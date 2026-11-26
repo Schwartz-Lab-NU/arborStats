@@ -1,3 +1,1 @@
-from .core import load_swc, arborStatsFromSkeleton
-
-__all__ = ["load_swc", "arborStatsFromSkeleton"]
+"""arborstats: skeletonize, flatten and compute arbor statistics of Eyewire II cells."""
