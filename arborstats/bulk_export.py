@@ -13,6 +13,8 @@ column per value, to a single Parquet file the webapp can load in about a second
     has_morpho_stats              bool           (False when morpho_stats is missing)
     morpho_stats.<key>            float64        (null when missing or not numeric)
     morph_dists.<name>.<part>     list<float64>  (e.g. morph_dists.sholl.radii)
+    arbor_features.<key>          float64        (added in arborstats 0.2: pruned_*, on/off_hull_*,
+                                                  wavy_*, asym_*, coverage_*; null for older rows)
 
 Rows are sorted by (segment_id, stats_method). The file metadata carries
 ``arbor_bulk_format`` so readers can reject layouts they don't understand;
@@ -37,6 +39,7 @@ BULK_FORMAT_VERSION = "1"
 BULK_PARQUET_FILENAME = "arbor_stats_bulk.parquet"
 MORPHO_PREFIX = "morpho_stats."
 DISTS_PREFIX = "morph_dists."
+FEATURES_PREFIX = "arbor_features."
 
 _BATCH_ROWS = 5000
 
@@ -88,11 +91,18 @@ def _iter_rows(conn: sqlite3.Connection) -> Iterator[tuple[int, str, dict]]:
             yield int(segment_id), str(stats_method), _parse_stats_json(stats_json)
 
 
-def _collect_columns(conn: sqlite3.Connection) -> tuple[list[str], list[tuple[str, str]]]:
-    """First pass: find every morpho_stats key and morph_dists (name, part)."""
+def _collect_columns(conn: sqlite3.Connection) -> tuple[list[str], list[tuple[str, str]], list[str]]:
+    """First pass: find every morpho_stats key, morph_dists (name, part) and scalar
+    arbor_features key."""
     scalar_keys: set[str] = set()
     dist_parts: set[tuple[str, str]] = set()
+    feature_keys: set[str] = set()
     for _sid, _method, payload in _iter_rows(conn):
+        features = payload.get("arbor_features")
+        if isinstance(features, dict):
+            for key, value in features.items():
+                if key != "feature_errors" and _is_scalar_like(value):
+                    feature_keys.add(str(key))
         morpho = payload.get("morpho_stats")
         if isinstance(morpho, dict):
             for key, value in morpho.items():
@@ -106,10 +116,11 @@ def _collect_columns(conn: sqlite3.Connection) -> tuple[list[str], list[tuple[st
                 for part, value in parts.items():
                     if isinstance(value, list):
                         dist_parts.add((str(name), str(part)))
-    return sorted(scalar_keys), sorted(dist_parts)
+    return sorted(scalar_keys), sorted(dist_parts), sorted(feature_keys)
 
 
-def _build_schema(scalar_keys: list[str], dist_parts: list[tuple[str, str]], metadata: dict) -> pa.Schema:
+def _build_schema(scalar_keys: list[str], dist_parts: list[tuple[str, str]], feature_keys: list[str],
+                  metadata: dict) -> pa.Schema:
     fields = [
         pa.field("segment_id", pa.int64(), nullable=False),
         pa.field("stats_method", pa.string(), nullable=False),
@@ -120,6 +131,7 @@ def _build_schema(scalar_keys: list[str], dist_parts: list[tuple[str, str]], met
         pa.field(f"{DISTS_PREFIX}{name}.{part}", pa.list_(pa.float64()))
         for name, part in dist_parts
     ]
+    fields += [pa.field(f"{FEATURES_PREFIX}{key}", pa.float64()) for key in feature_keys]
     return pa.schema(fields, metadata=metadata)
 
 
@@ -141,13 +153,13 @@ def export_bulk_parquet(sqlite_path: Path, parquet_path: Path) -> dict:
     tmp_path = parquet_path.with_name(parquet_path.name + ".tmp")
     rows = 0
     try:
-        scalar_keys, dist_parts = _collect_columns(conn)
+        scalar_keys, dist_parts, feature_keys = _collect_columns(conn)
         metadata = {
             "arbor_bulk_format": BULK_FORMAT_VERSION,
             "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             "source_sqlite": sqlite_path.name,
         }
-        schema = _build_schema(scalar_keys, dist_parts, metadata)
+        schema = _build_schema(scalar_keys, dist_parts, feature_keys, metadata)
 
         def _empty_batch() -> dict[str, list]:
             return {name: [] for name in schema.names}
@@ -166,6 +178,9 @@ def export_bulk_parquet(sqlite_path: Path, parquet_path: Path) -> dict:
                 dists = payload.get("morph_dists")
                 if not isinstance(dists, dict):
                     dists = {}
+                features = payload.get("arbor_features")
+                if not isinstance(features, dict):
+                    features = {}
 
                 batch["segment_id"].append(segment_id)
                 batch["stats_method"].append(stats_method)
@@ -177,6 +192,8 @@ def export_bulk_parquet(sqlite_path: Path, parquet_path: Path) -> dict:
                     parts = dists.get(name)
                     value = parts.get(part) if isinstance(parts, dict) else None
                     batch[f"{DISTS_PREFIX}{name}.{part}"].append(_float_list(value))
+                for key in feature_keys:
+                    batch[f"{FEATURES_PREFIX}{key}"].append(_scalar(features.get(key)))
 
                 rows += 1
                 if rows % _BATCH_ROWS == 0:
@@ -195,6 +212,7 @@ def export_bulk_parquet(sqlite_path: Path, parquet_path: Path) -> dict:
         "rows": rows,
         "scalar_columns": len(scalar_keys),
         "dist_columns": len(dist_parts),
+        "feature_columns": len(feature_keys),
         "bytes": parquet_path.stat().st_size,
         "seconds": time.monotonic() - started,
     }
@@ -205,7 +223,7 @@ def main(argv: list[str] | None = None) -> None:
         prog="arborstats-bulk-export",
         description=(
             "Write the compact Parquet file the webapp uses for multi-segment "
-            "reads (scalar morpho_stats and morph_dists only)."
+            "reads (scalar morpho_stats, morph_dists and scalar arbor_features only)."
         ),
     )
     parser.add_argument("sqlite_path", type=Path, help="Exported arbor_stats SQLite file")
@@ -221,8 +239,8 @@ def main(argv: list[str] | None = None) -> None:
     summary = export_bulk_parquet(args.sqlite_path, parquet_path)
     print(
         f"Bulk Parquet export: {summary['rows']} rows, "
-        f"{summary['scalar_columns']} scalar and {summary['dist_columns']} distribution "
-        f"columns, {summary['bytes'] / 1e6:.1f} MB in {summary['seconds']:.1f}s "
+        f"{summary['scalar_columns']} scalar, {summary['dist_columns']} distribution and "
+        f"{summary['feature_columns']} feature columns, {summary['bytes'] / 1e6:.1f} MB in {summary['seconds']:.1f}s "
         f"-> {summary['path']}"
     )
 

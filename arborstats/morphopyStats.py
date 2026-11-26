@@ -1,9 +1,6 @@
 from types import MappingProxyType
 from copy import deepcopy
 import numpy as np
-import io
-import re
-from contextlib import redirect_stdout
 from pathlib import Path
 import skeliner as sk
 from cloudvolume import CloudVolume
@@ -14,6 +11,10 @@ from morphopy.computation.feature_presentation import compute_morphometric_stati
 from arborstats.compute import compute_convex_hull_features, compute_density_xy, compute_density_z, \
     compute_percentiles_from_histogram, compute_features_xy_gauss, compute_gauss_xy_stats
 from arborstats.utils.postprocess import detect_axon
+from arborstats.features import (
+    COVERAGE_KEYS, compute_asymmetry_stats, compute_onoff_hulls, compute_pruned_stats,
+    compute_waviness_stats,
+)
 
 SKEL_KWS_RAW = MappingProxyType(dict(
     detect_soma=False,
@@ -44,40 +45,13 @@ Z_PERCS = (2, 5, 25, 50, 75, 95, 98)
 XY_DENS_KWS = MappingProxyType(dict(bin_size=25.0, margin_bins=2, blur_sigma=1.))
 
 def _prompt_for_token(client):
-    """
-    If the user has no token, show CaveClient’s instructions *minus* steps 3a/3b
-    and inject a Flatone-specific step 3.  Exits the program afterward.
-    """
+    """If the user has no CAVE token, print CAVEclient's instructions for getting and saving
+    one (``CAVEclient().auth.save_token(token=...)``) and exit."""
     if client.auth.token is not None:
         return
 
     print("No CAVEclient token found.\n")
-    # Capture CaveClient’s standard instructions without hard-coding them
-    buf = io.StringIO()
-    with redirect_stdout(buf):
-        client.auth.get_new_token()
-    cave_text = buf.getvalue().splitlines()
-
-    # Drop CaveClient’s “3a” and “3b” lines
-    filtered = [
-            ln for ln in cave_text
-            if not re.match(r'\s*3[ab]\)', ln)          # remove 3a/3b
-            and not re.match(r'\s*or\s*$', ln, re.I)    # remove “or”
-        ]
-    
-    # Insert our own single step 3 right after step 2
-    for idx, ln in enumerate(filtered):
-        if re.match(r'\s*2\)', ln):
-            filtered.insert(idx + 1,
-                "                3) Add it to `flatone` with:"
-            )
-            filtered.insert(idx + 2,
-                "                       flatone add-token <TOKEN>"
-            )
-            break
-
-    # Re-print the modified message and quit
-    print("\n".join(filtered))
+    client.auth.get_new_token()
     raise SystemExit
 
 def get_cv() -> CloudVolume:
@@ -115,7 +89,7 @@ def process_cell(
 
     # Mesh
     if isinstance(cell, trimesh.Trimesh):
-        mesh = cell
+        mesh = mesh_trimesh = cell
     else:
         cell = int(cell)
         mesh = cv.mesh.get(cell, remove_duplicate_vertices=True)[cell]
@@ -216,6 +190,9 @@ def compute_stats(
                 morph_dists[stat] = {'dist': dist, 'edges': edges}
     # Morphopy - End
 
+    # Features the Eyewire II typing found informative (see arborstats/features.py)
+    arbor_features = compute_arbor_features(skel, morph=morph if morpho_stats is not None else None)
+
     # Convex hull
     dend_mask = (skel.ntype == 3) | (skel.ntype == 4)
     dend_nodes = skel.nodes[dend_mask, :2]
@@ -263,6 +240,33 @@ def compute_stats(
         'hull_stats': hull_stats,
         'z_dict': z_dict,
         'xy_dict': xy_dict,
+        'arbor_features': arbor_features,
     }
 
     return stats
+
+
+def compute_arbor_features(skel: sk.Skeleton, morph=None) -> dict:
+    """Flat dict of the added features (skeleton in um, flattened, axon still labelled 2):
+    ``pruned_*`` (MorphoPy stats without tiny neurites; None without ``morph``),
+    ``on_hull_*`` / ``off_hull_*``, ``wavy_*``, ``asym_*`` and ``coverage_*`` (from
+    ``skel.extra['coverage_summary']``, set when the skeleton was warped). A group that fails
+    is None and its error is listed in ``feature_errors``, so the other stats still come out."""
+    out, errors = {}, {}
+
+    def _run(name, fn):
+        try:
+            out.update(fn())
+        except Exception as exc:  # keep the established stats even if a new feature fails
+            errors[name] = f"{type(exc).__name__}: {exc}"
+
+    if morph is not None:
+        _run('pruned', lambda: compute_pruned_stats(morph))
+    _run('onoff_hull', lambda: compute_onoff_hulls(skel))
+    _run('waviness', lambda: compute_waviness_stats(
+        nodes=np.asarray(skel.nodes, dtype=float), edges=skel.edges, ntype=skel.ntype, root=0))
+    _run('asymmetry', lambda: compute_asymmetry_stats(skel))
+    coverage = (skel.extra or {}).get('coverage_summary') or {f'coverage_{k}': None for k in COVERAGE_KEYS}
+    out.update(coverage)
+    out['feature_errors'] = errors or None
+    return out

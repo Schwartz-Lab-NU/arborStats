@@ -7,7 +7,6 @@ import sqlite3
 import sys
 import pickle
 import re
-import subprocess
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
@@ -16,8 +15,6 @@ from typing import Any, Iterable, Tuple
 import multiprocessing as mp
 
 import numpy as np
-
-from .core import load_swc, arborStatsFromSkeleton
 
 class ArborRunError(RuntimeError):
     """
@@ -31,7 +28,8 @@ class ArborRunError(RuntimeError):
 
 
 _MORPHOPY_HINT = (
-    "Install the Morphopy extras (e.g., pip install morphopy skeliner cloud-volume pywarper trimesh)."
+    "Reinstall arborstats (pip install -e .) to get its dependencies "
+    "(morphopy, skeliner, pywarper, cloud-volume, trimesh)."
 )
 _MORPHOPY_GLOBAL_MAP_PATH = Path(__file__).resolve().parent / "cached" / "global_map_j1_a16.npz"
 _MORPHOPY_FUNCS: dict[str, Any] | None = None
@@ -50,48 +48,6 @@ MORPHOPY_STATS_NAME = "arbor_stats_morphopy.pkl"
 
 def _seg_dir(root_output: Path, seg_id: int) -> Path:
     return Path(root_output) / str(seg_id)
-
-
-def _flatone_exists(root_output: Path, seg_id: int) -> bool:
-    """
-    look for flatone outputs: mesh.obj + skeleton_warped.swc
-    """
-    d = _seg_dir(root_output, seg_id)
-    if not d.exists():
-        return False
-    mesh, skel = d / "mesh.obj", d / "skeleton_warped.swc"
-    if mesh.exists() and skel.exists():
-        return True
-    return False
-
-
-def _arbor_stats_exists(root_output: Path, seg_id: int) -> bool:
-    """
-    look for an arbor stats file: arbor_stats.pkl   
-    """
-    d = _seg_dir(root_output, seg_id)
-    if not d.exists():
-        return False
-    stats = d / "arbor_stats.pkl"
-    if stats.exists():
-        return True
-    return False
-
-
-def _find_swc_for_stats(root_output: Path, seg_id: int) -> Path | None:
-    """
-    Try to locate a skeleton SWC file for computing arbor stats. Prefer skeleton_warped.swc if present.
-    Returns Path or None if not found.
-    """
-    d = _seg_dir(root_output, seg_id)
-    if not d.exists():
-        return None
-    
-    skel = d / "skeleton_warped.swc"
-    if skel.exists():
-        return skel
-    
-    return None
 
 
 def _morphopy_stats_exists(root_output: Path, seg_id: int) -> bool:
@@ -141,8 +97,8 @@ def _load_global_map_from_disk(path: Path) -> dict:
             code="morphopy-global-map-missing",
         )
     try:
-        with np.load(path, allow_pickle=True) as data:
-            mapping = {key: data[key] for key in data.files}
+        from .utils.io import load_global_map
+        mapping = load_global_map(path)  # pywarper < 0.3 dumps and >= 0.3 layers.save_map files
     except Exception as exc:
         raise ArborRunError(
             f"Failed to load morphopy global_map: {exc}",
@@ -280,8 +236,8 @@ def export_stats_to_sqlite(
         unchanged and skipped without touching their pickles. None checks every segID.
       - read_workers: threads used to read pickles in parallel.
     """
-    if stats_method not in ("flatone", "morphopy"):
-        raise ValueError(f"Unknown stats_method '{stats_method}'")
+    if stats_method != "morphopy":
+        raise ValueError(f"Unknown stats_method '{stats_method}' (only 'morphopy' is supported)")
     root_output = Path(root_output)
     sqlite_path = Path(sqlite_path)
     sqlite_path.parent.mkdir(parents=True, exist_ok=True)
@@ -324,8 +280,7 @@ def export_stats_to_sqlite(
         else:
             to_check = seg_ids
 
-        pkl_name = MORPHOPY_STATS_NAME if stats_method == "morphopy" else "arbor_stats.pkl"
-        pkl_paths = {s: root_output / str(s) / pkl_name for s in to_check}
+        pkl_paths = {s: root_output / str(s) / MORPHOPY_STATS_NAME for s in to_check}
 
         with ThreadPoolExecutor(max_workers=max(1, read_workers)) as readers:
             loaded_rows = readers.map(
@@ -402,109 +357,6 @@ def export_stats_to_sqlite(
 # ---------------------------
 # TASK IMPLEMENTATIONS
 # ---------------------------
-
-def run_flattener(seg_id: int, root_output: Path, overwrite: bool = False) -> Path:
-    """
-    Run `flatone SEG_ID --output-dir ROOT`, return the segment's output folder.
-    """
-    seg_dir = root_output / str(seg_id)
-    seg_dir.mkdir(parents=True, exist_ok=True)
-
-    error_file = seg_dir / "flatone_error.txt"
-    if error_file.exists():
-        error_file.unlink()
-    
-    cmd = ["flatone", str(seg_id), "--output-dir", str(root_output)]
-    if overwrite:
-        cmd.append("--overwrite")
-
-    # result = subprocess.run(cmd, capture_output=True, text=True)
-    # # flatone prints to stderr/stdout; detect common 'no mesh' case:
-    # if "No meshes found." in (result.stderr or ""):
-    #     # write a tiny marker file for consistency with your script
-    #     (seg_dir / "flatone_error.txt").write_text("No meshes found.\n")
-    #     raise ArborRunError("No meshes found.")
-
-    proc = subprocess.Popen(
-        cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        bufsize=1,
-        errors="replace",
-    )
-
-    lines = []
-    try:
-        assert proc.stdout is not None
-        for line in proc.stdout:
-            sys.stdout.write(line)
-            sys.stdout.flush()
-            lines.append(line)
-    finally:
-        if proc.stdout:
-            proc.stdout.close()
-
-    return_code = proc.wait()
-    full_output = "".join(lines)
-
-    # Preserve original behavior: detect 'no mesh' case and raise.
-    if "No meshes found." in full_output:
-        (seg_dir / "flatone_error.txt").write_text("No meshes found.\n")
-        raise ArborRunError("No meshes found.", code="no-mesh")
-    if "No CAVEclient token found." in full_output:
-        (seg_dir / "flatone_error.txt").write_text("No CAVEclient token found.\n")
-        raise ArborRunError(
-            "No CAVEclient token found. Please add token using the instructions above.",
-            code="no-cave-token",
-        )
-
-    if return_code != 0:
-        if full_output:
-            error_file.write_text(full_output)
-        else:
-            error_file.write_text(f"flatone exited with code {return_code} without output.\n")
-        raise ArborRunError(
-            f"flatone exited with code {return_code} for seg {seg_id}",
-            code="flatone-failed",
-        )
-
-
-    return seg_dir
-
-
-def compute_arbor_stats_for_seg(seg_id: int, root_output: Path, overwrite: bool = False) -> Path:
-    """
-    Compute arbor stats from an SWC found in the segment's output directory.
-    Writes Pickle (arbor_stats.pkl) file by default
-    """
-    segdir = _seg_dir(root_output, seg_id)
-    segdir.mkdir(parents=True, exist_ok=True)
-
-    error_file = segdir / "arbor_stats_error.txt"
-    if error_file.exists():
-        error_file.unlink()
-    
-    out_pkl = segdir / "arbor_stats.pkl"
-    if out_pkl.exists() and not overwrite:
-        return out_pkl
-
-    swc_path = _find_swc_for_stats(root_output, seg_id)
-    if swc_path is None:
-        raise ArborRunError(
-            f"No skeleton_warped.swc found for seg {seg_id}. Run flatone first or provide a skeleton.",
-            code="missing-skeleton",
-        )
-
-    coords, radii, edges = load_swc(str(swc_path))
-    stats, units = arborStatsFromSkeleton(coords, edges, radii=radii)
-    payload = {"segment_id": seg_id, "stats": stats, "units": units}
-
-    with open(out_pkl, "wb") as f:
-        pickle.dump(payload, f, protocol=pickle.HIGHEST_PROTOCOL)
-
-    return out_pkl
-
 
 def compute_morphopy_stats_for_seg(
     seg_id: int,
@@ -615,59 +467,30 @@ def compute_morphopy_stats_for_seg(
 # DISPATCH + PARALLEL DRIVER
 # ---------------------------
 
-def _decide_tasks_for_seg(
-    seg_id: int,
-    root_output: Path,
-    mode: str,
-    overwrite: bool,
-    new_only: bool,
-    stats_method: str,
-) -> Tuple[bool, bool]:
+def _needs_stats(seg_id: int, root_output: Path, overwrite: bool, new_only: bool) -> bool:
     """
-    Returns (need_flatone, need_arbor_stats) booleans for this seg_id.
-    - mode: "both" | "flatone-only" | "arbor-only"
+    Whether this seg_id's stats are (re)computed.
     - overwrite: force recompute
     - new_only: only compute when outputs are missing
     """
-    want_flat = stats_method == "flatone" and mode in ("both", "flatone-only")
-    want_arbor = mode in ("both", "arbor-only")
-    stats_exists_fn = _arbor_stats_exists if stats_method == "flatone" else _morphopy_stats_exists
-
-    if overwrite:
-        return (want_flat, want_arbor)
-
-    # not overwriting: skip if existing (and if new_only is requested)
-    if new_only:
-        need_flat  = want_flat  and not _flatone_exists(root_output, seg_id)
-        need_arbor = want_arbor and not stats_exists_fn(root_output, seg_id)
-        return (need_flat, need_arbor)
-
-    # default non-overwrite: we let the underlying tasks short-circuit if they see outputs
-    return (want_flat, want_arbor)
+    if overwrite or not new_only:
+        return True
+    return not _morphopy_stats_exists(root_output, seg_id)
 
 
 def _one_worker(args: tuple) -> tuple:
-    seg_id, root_output, mode, overwrite, new_only, stats_method, cell_class = args
+    seg_id, root_output, overwrite, new_only, cell_class = args
     try:
-        need_flat, need_arbor = _decide_tasks_for_seg(
-            seg_id, root_output, mode, overwrite, new_only, stats_method
-        )
-
-        if stats_method == "flatone":
-            if need_flat:
-                run_flattener(seg_id, root_output, overwrite=overwrite)
-            if need_arbor:
-                compute_arbor_stats_for_seg(seg_id, root_output, overwrite=overwrite)
-        else:
-            if need_arbor:
-                print("#####################################################################\n" \
-                "Cell Class:", cell_class)
-                compute_morphopy_stats_for_seg(
-                    seg_id,
-                    root_output,
-                    cell_class=cell_class,
-                    overwrite=overwrite,
-                )
+        need_arbor = _needs_stats(seg_id, root_output, overwrite, new_only)
+        if need_arbor:
+            print("#####################################################################\n" \
+            "Cell Class:", cell_class)
+            compute_morphopy_stats_for_seg(
+                seg_id,
+                root_output,
+                cell_class=cell_class,
+                overwrite=overwrite,
+            )
 
         return ("ok", seg_id, need_arbor)
 
@@ -680,10 +503,6 @@ def _one_worker(args: tuple) -> tuple:
             return ("no-mesh", seg_id, msg)
         if code == "no-cave-token" or msg.startswith("No CAVEclient token found."):
             return ("No-CAVEclient-token-found", seg_id, msg)
-        if code == "missing-skeleton" or "No skeleton_warped.swc found" in msg:
-            return ("missing-skeleton", seg_id, msg)
-        if code == "flatone-failed":
-            return ("flatone-failed", seg_id, msg)
         if code in ("missing-morphopy-deps", "morphopy-global-map-missing", "morphopy-global-map-error", "morphopy-cv-error"):
             return (code, seg_id, msg)
         if code in ("morphopy-failed", "morphopy-write-failed"):
@@ -697,7 +516,7 @@ def _one_worker(args: tuple) -> tuple:
 _RUN_MARKERS = (
     "not_processed_seg_ids",
     "arbor_stats_error_seg_ids",
-    "flatone_failed_seg_ids",
+    "flatone_failed_seg_ids",  # no longer written; listed so old files are cleaned up
     "morphopy_failed_seg_ids",
     "arbor_stats_run_error",
 )
@@ -714,26 +533,22 @@ def process_many(
     root_output: Path,
     overwrite: bool = False,
     jobs: int = 1,
-    mode: str = "both",       # "both" | "flatone-only" | "arbor-only"
     new_only: bool = False,   # process only missing outputs when not overwriting
-    stats_method: str = "flatone",
+    stats_method: str = "morphopy",
     cell_classes: dict[int, str | None] | None = None,
     run_label: str | None = None,
     marker_dir: Path | None = None,
 ) -> set[int]:
     """
-    Backward-compatible entry point with two new keyword args:
-      - mode: which tasks to run
+    Compute the morphopy-backend stats for many segIDs in parallel.
       - new_only: only process segIDs missing required artifacts (when overwrite=False)
-      - stats_method: 'flatone' (default) or 'morphopy'
+      - stats_method: only 'morphopy' (the flatone backend was removed)
       - run_label: prefix for this run's marker .txt files (e.g. 'All Cells')
       - marker_dir: where to write the marker .txt files (default: root_output)
     Returns the segIDs whose stats were recomputed in this run.
     """
-    if stats_method not in ("flatone", "morphopy"):
-        raise ValueError(f"Unknown stats_method '{stats_method}'")
-    if stats_method == "morphopy" and mode == "flatone-only":
-        raise ValueError("stats_method='morphopy' is incompatible with mode='flatone-only'")
+    if stats_method != "morphopy":
+        raise ValueError(f"Unknown stats_method '{stats_method}' (only 'morphopy' is supported)")
 
     root_output = Path(root_output)
     root_output.mkdir(parents=True, exist_ok=True)
@@ -767,10 +582,8 @@ def process_many(
         (
             int(sid),
             root_output,
-            mode,
             bool(overwrite),
             bool(new_only),
-            stats_method,
             class_map.get(int(sid)),
         )
         for sid in seg_ids
@@ -810,11 +623,6 @@ def process_many(
                 # Track segIDs that could not be processed due to missing mesh/SWC
                 _append_seg_id("not_processed_seg_ids", sid)
                 # Optionally keep a per-seg note:
-                (root_output / str(sid) / "arbor_stats_error.txt").write_text(msg)
-                continue
-            if kind in ("missing-skeleton", "flatone-failed"):
-                _, sid, msg = res
-                _append_seg_id("flatone_failed_seg_ids", sid)
                 (root_output / str(sid) / "arbor_stats_error.txt").write_text(msg)
                 continue
             if kind == "morphopy-failed":

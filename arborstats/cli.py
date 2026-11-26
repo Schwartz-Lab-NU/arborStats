@@ -176,7 +176,7 @@ def _resolve_export_sqlite_path(args) -> Path:
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="arborstats",
-        description="Run flatone + compute arbor statistics per segment.",
+        description="Skeletonize, flatten and compute arbor statistics per segment.",
         formatter_class=_Fmt,
         epilog=(
             "Notes:\n"
@@ -258,19 +258,19 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--output-dir", 
                    type=Path, 
                    required=True,
-                   help="Root output directory (flatone writes SEG_ID/ here)")
+                   help="Root output directory (per-segment SEG_ID/ folders are written here)")
     p.add_argument("-j", "--jobs", 
                    type=int, 
                    default=1, 
                    help="parallel workers")
     p.add_argument(
         "--stats-method",
-        choices=("flatone", "morphopy"),
-        default="flatone",
+        choices=("morphopy",),
+        default="morphopy",
         help=(
-            "Pick which backend computes arbor statistics. "
-            "'flatone' (default) runs flatone + arborStatsFromSkeleton. "
-            "'morphopy' runs the in-repo morphopy pipeline using cached global maps."
+            "Backend that computes arbor statistics. Only 'morphopy' remains (skeliner + "
+            "pywarper on the raw mesh, in-repo); the flatone backend was removed. Kept so "
+            "existing command lines keep working."
         ),
     )
     p.add_argument(
@@ -327,41 +327,31 @@ def build_parser() -> argparse.ArgumentParser:
     og.add_argument(
         "--overwrite-all",
         action="store_true",
-        help="Compute flatone results and arbor stats even if output exists"
+        help="Compute arbor stats even if output exists"
     )
     og.add_argument(
         "--new-only",
         action="store_true",
-        help="Compute flatone results and arbor stats only for new segment IDs"
+        help="Compute arbor stats only for new segment IDs"
     )
 
     # ---------- Mode selector (MUTUALLY EXCLUSIVE) ----------
     mode = p.add_argument_group(
         "Which tasks to run — mutually exclusive",
-        "Pick at most one. Default is to run both flatone and arbor stats."
+        "Pick at most one. Default is to compute arbor stats."
     )
     mg = mode.add_mutually_exclusive_group()
     mg.add_argument(
-        "--flatone-arbor-stats-both",
-        action="store_true",
-        help="Run flatone and compute arbor stats (default)"
-    )
-    mg.add_argument(
         "--arbor-stats-only",
         action="store_true",
-        help="Skip flatone; compute arbor stats only (uses existing SWC if present)"
-    )
-    mg.add_argument(
-        "--flatone-only",
-        action="store_true",
-        help="Run flatone only; skip arbor stats"
+        help="Compute arbor stats (the default; kept for existing command lines)"
     )
     mg.add_argument(
         "--export-only",
         action="store_true",
         help="Skip processing and export existing arbor stats to SQLite"
     )
-    
+
     return p
 
 def main(argv: list[str] | None = None) -> None:
@@ -384,27 +374,15 @@ def main(argv: list[str] | None = None) -> None:
 
     recomputed = None
     if not args.export_only:
-        # Derive mode (default is both)
-        if getattr(args, "arbor_stats_only", False):
-            mode = "arbor-only"
-        elif getattr(args, "flatone_only", False):
-            mode = "flatone-only"
-        else:
-            mode = "both"  # default or when --flatone-arbor-stats-both is set
-
         # Map overwrite policy
         overwrite = bool(getattr(args, "overwrite_all", False))
         new_only = bool(getattr(args, "new_only", False))
-
-        if args.stats_method == "morphopy" and mode == "flatone-only":
-            parser.error("--stats-method=morphopy cannot be combined with --flatone-only")
 
         recomputed = process_many(
             segids,
             args.output_dir,
             overwrite=overwrite,
             jobs=args.jobs,
-            mode=mode,
             new_only=new_only,
             stats_method=args.stats_method,
             cell_classes=segid_cell_classes,

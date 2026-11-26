@@ -4,22 +4,26 @@ build-backend = "hatchling.build"
 
 [project]
 name = "arborstats"                       # PyPI package name (normalized)
-version = "0.1.0"
-description = "Compute arbor statistics from flatone outputs (Eyewire II)."
+version = "0.2.0"
+description = "Skeletonize, flatten and compute arbor statistics of Eyewire II cells."
 readme = "README.md"
 requires-python = ">=3.11"
 license = { file = "LICENSE" }
 authors = [{ name = "Your Name", email = "you@example.com" }]
 
-# flatone is a runtime dependency; pip will install it for your users
 dependencies = [
-  "flatone @ git+https://github.com/berenslab/flatone.git@main",
+  "skeliner[trimesh]>=0.4.1",  # raw-mesh skeletonization (no sk.preprocess)
+  "pywarper>=0.3.0",           # flattening; reads the >= 0.3 layered maps and their coverage
+  "morphopy>=0.7.6",
+  "caveclient>=7.8.0",
+  "cloud-volume>=12.3.1",
+  "trimesh>=4.7.4",
+  "networkx",
+  "scipy",
+  "matplotlib",
   "astropy>=7.1.0",
-  "morphopy>=0.7.3",
   "numpy>=1.24",
-  "shapely>=2.0",
   "pandas>=2.0",
-  "concave-hull>=0.0.7",  # import name: `concave_hull`
   "pyarrow>=11"           # bulk Parquet export read by the webapp
 ]
 
@@ -30,6 +34,3 @@ arborstats-bulk-export = "arborstats.bulk_export:main"
 [tool.hatch.build.targets.wheel]
 # Tell hatch to include the `arborstats/` package
 packages = ["arborstats"]
-
-[tool.hatch.metadata]
-allow-direct-references = true
