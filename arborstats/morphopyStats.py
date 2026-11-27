@@ -171,7 +171,8 @@ def compute_stats(
     if len(morph.get_dendrite_nodes()) < 20:
         morpho_stats = None
     else:
-        morpho_stats = dict(compute_morphometric_statistics(morph).iloc[0])
+        # Dendrites only: the axon (ntype 2) is excluded, as for the hulls and density profiles
+        morpho_stats = dict(compute_morphometric_statistics(dend_tree).iloc[0])
 
     ## Morphopy distributions + sholl
     if len(morph.get_dendrite_nodes()) < 20:
@@ -191,7 +192,7 @@ def compute_stats(
     # Morphopy - End
 
     # Features the Eyewire II typing found informative (see arborstats/features.py)
-    arbor_features = compute_arbor_features(skel, morph=morph if morpho_stats is not None else None)
+    arbor_features = compute_arbor_features(skel, morph=dend_tree if morpho_stats is not None else None)
 
     # Convex hull
     dend_mask = (skel.ntype == 3) | (skel.ntype == 4)
@@ -248,7 +249,8 @@ def compute_stats(
 
 def compute_arbor_features(skel: sk.Skeleton, morph=None) -> dict:
     """Flat dict of the added features (skeleton in um, flattened, axon still labelled 2):
-    ``pruned_*`` (MorphoPy stats without tiny neurites; None without ``morph``),
+    ``pruned_*`` (MorphoPy stats of ``morph``, the dendritic tree, without tiny neurites; None
+    without ``morph``),
     ``on_hull_*`` / ``off_hull_*``, ``wavy_*``, ``asym_*`` and ``coverage_*`` (from
     ``skel.extra['coverage_summary']``, set when the skeleton was warped). A group that fails
     is None and its error is listed in ``feature_errors``, so the other stats still come out."""

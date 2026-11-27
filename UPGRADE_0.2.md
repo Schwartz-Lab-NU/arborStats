@@ -10,7 +10,12 @@ backend and adds new per-cell features (`arbor_features`). The changes are on th
   keeps working without edits. `--stats-method flatone`, `--flatone-only` and
   `--flatone-arbor-stats-both` no longer exist.
 - **No columns removed.** Everything in `morpho_stats`, `morph_dists`, `hull_stats`, `z_dict` and
-  `xy_dict` is still computed as before. New values are only added.
+  `xy_dict` is still computed. New values are only added.
+- **`morpho_stats` without the axon.** The MorphoPy statistics (`morpho_stats` and the new
+  `pruned_*` values) are now computed on the dendrites only, like the hulls, density profiles and
+  distributions. Before, they included the axon. For cells with an axon (mainly RGCs), `total_length`,
+  `tips`, `branch_points`, `width`/`depth`/`height`, tortuosity, angles and radii change. Recompute
+  all cells (step 4) so that old and new cells are comparable.
 - **No system libraries needed.** flatone needed SuiteSparse; arborstats 0.2 does not.
 - **Old cells keep their old stats.** `--new-only` skips cells that already have outputs, so they
   get the new features only after a recompute (step 4).
